@@ -7,7 +7,9 @@
 //! (CLI, TUI, Signal adapter) communicate with.
 
 pub mod daemon;
+pub mod logging;
 pub mod message;
 pub mod skill;
 
 pub use daemon::Daemon;
+pub use logging::{LogCollector, LogReader};
