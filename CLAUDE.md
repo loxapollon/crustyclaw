@@ -4,54 +4,69 @@ A secure, Rust-based alternative to OpenClaw and NanoClaw, using Forgejo Actions
 
 ## Project Overview
 
-CrustyClaw is built with security-first principles in Rust, leveraging the language's
-ownership model, type system, and zero-cost abstractions to provide a hardened tool
-that replaces OpenClaw and NanoClaw with a single, auditable codebase.
+CrustyClaw is a security-first AI agent daemon written in Rust. It replaces OpenClaw
+(52+ modules, shared-memory Node.js process) and NanoClaw (500-line TypeScript) with
+a single, auditable, memory-safe codebase. Users interact with the agent via Signal.
+Operators manage it via a CLI and TUI.
 
 ## Architecture
 
-- **Language:** Rust (latest stable)
-- **Extension model:** Forgejo Actions — plugins and extensions are defined as
-  Forgejo Action workflows, keeping the core minimal and the extension surface
-  sandboxed.
-- **Security posture:** Memory-safe by default, no `unsafe` without documented
-  justification and audit, dependency supply-chain checks via `cargo-audit`.
+- **Language:** Rust (latest stable), `#![deny(unsafe_code)]`
+- **Core:** Async daemon (`tokio`) — message routing, skill execution, LLM integration
+- **Control plane:** CLI (`clap`) for scripting + TUI (`ratatui`) for interactive ops
+- **User channel:** Signal (end-to-end encrypted messaging)
+- **Extension model:** Forgejo Actions — plugins run as sandboxed CI/CD workflows
+- **Security posture:** Memory-safe by default, container isolation for skills,
+  no `unsafe` without documented justification, `cargo-audit` supply-chain checks
+
+## Workspace Layout
+
+```
+crustyclaw/
+├── Cargo.toml                  # workspace root
+├── crates/
+│   ├── crustyclaw-core/        # daemon runtime, message routing, skill engine
+│   ├── crustyclaw-cli/         # CLI control plane (clap)
+│   ├── crustyclaw-tui/         # TUI control plane (ratatui + crossterm)
+│   ├── crustyclaw-signal/      # Signal protocol channel adapter
+│   ├── crustyclaw-macros/      # proc-macro crate (derive, attribute macros)
+│   └── crustyclaw-config/      # config loading, validation, policy engine
+├── actions/                    # Forgejo Action extension definitions
+├── .forgejo/workflows/         # CI/CD pipelines
+└── .claude/plans/              # roadmap and planning docs
+```
 
 ## Development Guidelines
 
-- All code must compile with `#![deny(unsafe_code)]` unless an explicit exemption
-  is granted and documented.
-- Use `cargo clippy` and `cargo fmt` before every commit.
+- All crates must compile with `#![deny(unsafe_code)]` unless explicitly exempted.
+- Run `cargo clippy` and `cargo fmt` before every commit.
 - Tests are required for all public API surfaces (`cargo test`).
 - Prefer compile-time guarantees (const generics, type-state patterns, macros)
   over runtime checks where feasible.
-- Forgejo Action extension points should be defined declaratively; prefer derive
-  macros or attribute macros for registering new actions.
+- Forgejo Action extension points should be defined declaratively via derive/attribute macros.
+- Sensitive data types must derive `Redact` and `SecureZeroize`.
 
 ## Build & Run
 
 ```bash
-cargo build          # debug build
-cargo build --release # release build
-cargo test           # run tests
-cargo clippy         # lint
-cargo fmt            # format
+cargo build                    # debug build
+cargo build --release          # release build
+cargo test --workspace         # run all tests
+cargo clippy --workspace       # lint all crates
+cargo fmt --all                # format all crates
+cargo run -p crustyclaw-cli    # run CLI
+cargo run -p crustyclaw-tui    # run TUI
 ```
 
-## Extension via Forgejo Actions
+## Key Dependencies
 
-Extensions are implemented as Forgejo Action workflows that the CrustyClaw core
-dispatches to. The core exposes a stable JSON/YAML interface for action definitions.
-See the `actions/` directory (when created) for examples.
-
-## Repository Structure
-
-```
-├── CLAUDE.md          # this file — project context for Claude
-├── README.md          # project readme
-├── src/               # Rust source (to be created)
-│   └── main.rs
-├── actions/           # Forgejo Action extension definitions (to be created)
-├── Cargo.toml         # Rust project manifest (to be created)
-└── .github/           # CI workflows (to be created)
-```
+| Crate | Purpose |
+|-------|---------|
+| `tokio` | Async runtime |
+| `clap` | CLI parsing |
+| `ratatui` + `crossterm` | TUI framework |
+| `serde` + `toml` | Config serialization |
+| `presage` or `libsignal` | Signal protocol |
+| `syn` + `quote` + `proc-macro2` | Proc-macro infrastructure |
+| `zeroize` | Sensitive memory clearing |
+| `tracing` | Structured logging |
