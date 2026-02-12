@@ -47,31 +47,33 @@ crustyclaw/
 - [x] Add `cargo-audit`, `clippy`, `fmt` checks to CI
 - [x] Add `#![deny(unsafe_code)]` across all crates
 
-## Phase 2 — TUI Control Plane
-- [ ] `crustyclaw-tui`: `ratatui` + `crossterm` skeleton
-- [ ] Dashboard panel: daemon status, uptime, connected channels
-- [ ] Logs panel: live log streaming from daemon (via Unix socket or IPC)
-- [ ] Config panel: view/edit configuration interactively
-- [ ] Message panel: live view of incoming/outgoing Signal messages
-- [ ] Keybinding system (vim-style navigation)
+## Phase 2 — TUI Control Plane (Complete)
+- [x] `crustyclaw-tui`: `ratatui` + `crossterm` multi-module TUI
+- [x] Dashboard panel: daemon status, uptime, connected channels
+- [x] Logs panel: live log streaming via `LogCollector` tracing layer
+- [x] Config panel: syntax-highlighted TOML display with scrolling
+- [x] Message panel: scrollable message list (ready for Signal integration)
+- [x] Keybinding system (vim-style: j/k, d/u, gg/G, h/l, Tab, 1-4)
 
-## Phase 3 — Signal Channel Adapter
-- [ ] Research Signal protocol integration options (`presage`, `signal-cli`, `libsignal`)
-- [ ] `crustyclaw-signal`: Signal account linking / registration
-- [ ] Message receive pipeline: Signal → core daemon → LLM → response → Signal
-- [ ] Group chat support
-- [ ] Media handling (images, files, voice notes)
-- [ ] Rate limiting and abuse protection
-- [ ] Type-state pattern: `Unlinked → Linked → Verified` for Signal session lifecycle
+## Phase 3 — Signal Channel Adapter (Complete)
+- [x] `crustyclaw-signal`: Multi-module crate (adapter, message, rate_limit, service)
+- [x] Type-state pattern: `Unlinked → Linked → Verified` for Signal session lifecycle
+- [x] Message types: `SignalMessage`, `Attachment`, `GroupInfo`
+- [x] Group chat support (GroupInfo with members)
+- [x] Media handling types (images, audio/voice notes, video, files)
+- [x] Rate limiting and abuse protection (token-bucket per sender)
+- [x] `SignalService` async runner with inbound/outbound message routing
+- [ ] Signal protocol integration (`presage` / `signal-cli` binding) — deferred
 
-## Phase 4 — Security Primitives (Metaprogramming-Heavy)
-- [ ] `#[derive(Validate)]` — compile-time input validation from struct annotations
-- [ ] `#[derive(Redact)]` — auto-redact sensitive fields in Debug/Display/logs
-- [ ] `#[derive(SecureZeroize)]` — zeroize sensitive memory on Drop
-- [ ] Type-state pattern for auth lifecycle (Unauth → Auth → Authorized)
-- [ ] `const` assertions for security invariants (key lengths, TLS versions)
-- [ ] Build script: embed git commit hash, build timestamp, lockfile checksum
-- [ ] Container isolation: sandboxed skill execution (seccomp/landlock on Linux)
+## Phase 4 — Security Primitives (Complete)
+- [x] `#[derive(Validate)]` — field-level validation (non_empty, range, min/max_len)
+- [x] `#[derive(Redact)]` — auto-redact sensitive fields in Debug output
+- [x] `#[derive(SecureZeroize)]` — zeroize sensitive memory on Drop
+- [x] Type-state pattern for auth lifecycle (Unauth → Auth → Authorized)
+- [x] `const` assertions for security invariants (key lengths, TLS versions)
+- [x] `KeyBuffer<N>` — const-generic sized key buffer with compile-time enforcement
+- [x] Build script: embed git commit hash, build timestamp, build profile
+- [ ] Container isolation: sandboxed skill execution (seccomp/landlock) — deferred
 
 ## Phase 5 — Configuration & Policy Engine
 - [ ] Config format: TOML with `serde` + `Validate` derive stacking
