@@ -29,21 +29,23 @@ crustyclaw/
 
 ---
 
-## Phase 0 — Foundation (Current)
+## Phase 0 — Foundation (Complete)
 - [x] Initialize repository with README.md and CLAUDE.md
 - [x] Research Rust metaprogramming landscape
 - [x] Decide on architecture: CLI + TUI control, Signal channel, Forgejo extensions
-- [ ] Set up Cargo workspace structure
+- [x] Set up Cargo workspace structure
 
-## Phase 1 — Core Scaffolding
-- [ ] Create `Cargo.toml` workspace with crate layout above
-- [ ] `crustyclaw-core`: async daemon skeleton (`tokio`, signal handling, graceful shutdown)
-- [ ] `crustyclaw-cli`: `clap`-based CLI with subcommands (`start`, `stop`, `status`, `config`)
-- [ ] `crustyclaw-macros`: empty proc-macro crate, wired into workspace
-- [ ] `crustyclaw-config`: TOML config loading with `serde` + validation
-- [ ] Set up CI via Forgejo Actions (`.forgejo/workflows/ci.yml`)
-- [ ] Add `cargo-audit`, `clippy`, `fmt` checks to CI
-- [ ] Add `#![deny(unsafe_code)]` across all crates
+## Phase 1 — Core Scaffolding (Complete)
+- [x] Create `Cargo.toml` workspace with crate layout above
+- [x] `crustyclaw-core`: async daemon skeleton (`tokio`, signal handling, graceful shutdown)
+- [x] `crustyclaw-cli`: `clap`-based CLI with subcommands (`start`, `stop`, `status`, `config`)
+- [x] `crustyclaw-macros`: proc-macro crate with `Redact` derive macro
+- [x] `crustyclaw-config`: TOML config loading with `serde` + validation
+- [x] `crustyclaw-signal`: Signal adapter with type-state lifecycle pattern
+- [x] `crustyclaw-tui`: `ratatui` + `crossterm` skeleton with panel navigation
+- [x] Set up CI via Forgejo Actions (`.forgejo/workflows/ci.yml`)
+- [x] Add `cargo-audit`, `clippy`, `fmt` checks to CI
+- [x] Add `#![deny(unsafe_code)]` across all crates
 
 ## Phase 2 — TUI Control Plane
 - [ ] `crustyclaw-tui`: `ratatui` + `crossterm` skeleton
