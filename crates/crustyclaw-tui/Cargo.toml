@@ -1,0 +1,20 @@
+[package]
+name = "crustyclaw-tui"
+description = "TUI control plane for CrustyClaw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "crustyclaw-tui"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+crustyclaw-core = { workspace = true }
+crustyclaw-config = { workspace = true }

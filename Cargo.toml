@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/crustyclaw-core",
+    "crates/crustyclaw-cli",
+    "crates/crustyclaw-tui",
+    "crates/crustyclaw-signal",
+    "crates/crustyclaw-macros",
+    "crates/crustyclaw-config",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://forgejo.example.com/crustyclaw/crustyclaw"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Serialization & config
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Proc-macro infrastructure
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+# Security
+zeroize = { version = "1", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Internal crates
+crustyclaw-core = { path = "crates/crustyclaw-core" }
+crustyclaw-cli = { path = "crates/crustyclaw-cli" }
+crustyclaw-tui = { path = "crates/crustyclaw-tui" }
+crustyclaw-signal = { path = "crates/crustyclaw-signal" }
+crustyclaw-macros = { path = "crates/crustyclaw-macros" }
+crustyclaw-config = { path = "crates/crustyclaw-config" }

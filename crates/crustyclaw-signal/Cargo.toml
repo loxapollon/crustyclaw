@@ -1,0 +1,12 @@
+[package]
+name = "crustyclaw-signal"
+description = "Signal protocol channel adapter for CrustyClaw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+crustyclaw-core = { workspace = true }
