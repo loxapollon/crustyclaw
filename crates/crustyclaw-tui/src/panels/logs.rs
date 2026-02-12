@@ -62,11 +62,7 @@ impl LogsPanel {
         if self.entries.is_empty() {
             let empty = ratatui::widgets::Paragraph::new("  (no log entries yet)")
                 .style(Style::default().fg(Color::DarkGray))
-                .block(
-                    Block::default()
-                        .title(" Logs (0) ")
-                        .borders(Borders::ALL),
-                );
+                .block(Block::default().title(" Logs (0) ").borders(Borders::ALL));
             frame.render_widget(empty, area);
             return;
         }
