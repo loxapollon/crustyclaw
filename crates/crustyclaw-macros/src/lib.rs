@@ -3,18 +3,19 @@
 //! Procedural macros for CrustyClaw.
 //!
 //! This crate provides derive and attribute macros used across the CrustyClaw
-//! workspace. Planned macros include:
+//! workspace:
 //!
-//! - `#[derive(Validate)]` — compile-time input validation from struct annotations
-//! - `#[derive(Redact)]` — auto-redact sensitive fields in Debug/Display/logs
+//! - `#[derive(Redact)]` — auto-redact sensitive fields in Debug output
+//! - `#[derive(Validate)]` — generate a `validate()` method from field annotations
 //! - `#[derive(SecureZeroize)]` — zeroize sensitive memory on Drop
-//! - `#[derive(ActionPlugin)]` — Forgejo Action plugin scaffolding
-//! - `#[action_hook(event, priority)]` — hook registration attribute
 
 extern crate proc_macro;
 
+mod redact;
+mod secure_zeroize;
+mod validate;
+
 use proc_macro::TokenStream;
-use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
 
 /// Derive macro for redacting sensitive fields in Debug output.
@@ -37,54 +38,69 @@ use syn::{parse_macro_input, DeriveInput};
 #[proc_macro_derive(Redact, attributes(redact))]
 pub fn derive_redact(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let name = &input.ident;
+    redact::expand(input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
 
-    let fields = match &input.data {
-        syn::Data::Struct(data) => match &data.fields {
-            syn::Fields::Named(fields) => &fields.named,
-            _ => {
-                return syn::Error::new_spanned(name, "Redact only supports named fields")
-                    .to_compile_error()
-                    .into();
-            }
-        },
-        _ => {
-            return syn::Error::new_spanned(name, "Redact can only be derived for structs")
-                .to_compile_error()
-                .into();
-        }
-    };
+/// Derive macro for compile-time input validation.
+///
+/// Generates a `validate(&self) -> Result<(), Vec<String>>` method that
+/// checks field constraints at runtime, driven by annotations applied at
+/// compile time.
+///
+/// Supported attributes:
+/// - `#[validate(non_empty)]` — string/collection must not be empty
+/// - `#[validate(range(min = N, max = M))]` — numeric value in [N, M]
+/// - `#[validate(min_len = N)]` — minimum length for strings/collections
+/// - `#[validate(max_len = N)]` — maximum length for strings/collections
+///
+/// # Example
+///
+/// ```ignore
+/// use crustyclaw_macros::Validate;
+///
+/// #[derive(Validate)]
+/// struct ServerConfig {
+///     #[validate(non_empty)]
+///     pub host: String,
+///     #[validate(range(min = 1, max = 65535))]
+///     pub port: u16,
+///     #[validate(min_len = 8)]
+///     pub api_key: String,
+/// }
+/// ```
+#[proc_macro_derive(Validate, attributes(validate))]
+pub fn derive_validate(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    validate::expand(input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
 
-    let field_debug: Vec<_> = fields
-        .iter()
-        .map(|f| {
-            let field_name = f.ident.as_ref().unwrap();
-            let field_name_str = field_name.to_string();
-            let is_redacted = f.attrs.iter().any(|a| a.path().is_ident("redact"));
-
-            if is_redacted {
-                quote! {
-                    .field(#field_name_str, &"[REDACTED]")
-                }
-            } else {
-                quote! {
-                    .field(#field_name_str, &self.#field_name)
-                }
-            }
-        })
-        .collect();
-
-    let name_str = name.to_string();
-
-    let expanded = quote! {
-        impl ::std::fmt::Debug for #name {
-            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                f.debug_struct(#name_str)
-                    #(#field_debug)*
-                    .finish()
-            }
-        }
-    };
-
-    expanded.into()
+/// Derive macro for secure memory clearing on drop.
+///
+/// Generates a `Drop` implementation that calls `zeroize()` on all fields
+/// (or only fields *not* marked `#[no_zeroize]`). Requires the `zeroize`
+/// crate as a dependency in the consuming crate.
+///
+/// # Example
+///
+/// ```ignore
+/// use crustyclaw_macros::SecureZeroize;
+///
+/// #[derive(SecureZeroize)]
+/// struct Secret {
+///     pub key: String,
+///     pub nonce: Vec<u8>,
+///     #[no_zeroize]
+///     pub label: String,
+/// }
+/// ```
+#[proc_macro_derive(SecureZeroize, attributes(no_zeroize))]
+pub fn derive_secure_zeroize(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    secure_zeroize::expand(input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
 }

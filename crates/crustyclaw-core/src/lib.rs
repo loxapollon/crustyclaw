@@ -6,9 +6,12 @@
 //! and LLM integration. The daemon is the central process that all other components
 //! (CLI, TUI, Signal adapter) communicate with.
 
+pub mod auth;
+pub mod build_info;
 pub mod daemon;
 pub mod logging;
 pub mod message;
+pub mod security;
 pub mod skill;
 
 pub use daemon::Daemon;
