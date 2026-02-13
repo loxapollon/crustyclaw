@@ -3,8 +3,6 @@
 //! These live in crustyclaw-core because proc-macro crates can't have
 //! integration tests that use their own macros.
 
-#![allow(dead_code)]
-
 use crustyclaw_macros::{ActionPlugin, Redact, SecureZeroize, Validate, action_hook};
 
 // ── Redact tests ──────────────────────────────────────────────────
@@ -26,6 +24,11 @@ fn test_redact_debug_output() {
         token: "tok_abc123".to_string(),
     };
 
+    // Verify fields are populated (exercises field reads)
+    assert_eq!(creds.password, "s3cret");
+    assert_eq!(creds.token, "tok_abc123");
+
+    // But Debug output should redact them
     let debug = format!("{creds:?}");
     assert!(debug.contains("alice"), "username should be visible");
     assert!(
@@ -165,6 +168,8 @@ fn test_secure_zeroize_clears_on_drop() {
         nonce: vec![1, 2, 3, 4],
         label: "my-key".to_string(),
     };
+    // Verify the #[no_zeroize] field is accessible and populated
+    assert_eq!(secret.label, "my-key");
     drop(secret); // Should call zeroize on key and nonce, skip label
 }
 
@@ -209,6 +214,14 @@ struct GreetAction {
 
 #[test]
 fn test_action_plugin_metadata() {
+    let action = GreetAction {
+        name: "world".to_string(),
+        greeting: "Hi".to_string(),
+    };
+    // Verify fields are accessible
+    assert_eq!(action.name, "world");
+    assert_eq!(action.greeting, "Hi");
+
     assert_eq!(GreetAction::plugin_name(), "greeting");
     assert_eq!(GreetAction::plugin_version(), "1.0.0");
     assert_eq!(GreetAction::plugin_description(), "Says hello");
@@ -222,6 +235,11 @@ struct MinimalPlugin {
 
 #[test]
 fn test_action_plugin_defaults() {
+    let plugin = MinimalPlugin {
+        value: "test".to_string(),
+    };
+    assert_eq!(plugin.value, "test");
+
     // Without #[action(...)] attrs, uses struct name lowered as name
     assert_eq!(MinimalPlugin::plugin_name(), "minimalplugin");
     assert_eq!(MinimalPlugin::plugin_version(), "0.1.0");

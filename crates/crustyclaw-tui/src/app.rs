@@ -6,7 +6,10 @@ use crustyclaw_config::AppConfig;
 use crustyclaw_core::LogReader;
 
 use crate::keymap::{Action, KeyMapper};
-use crate::panels::{ConfigPanel, DashboardPanel, LogsPanel, MessagesPanel, PanelState};
+use crate::panels::{
+    ConfigPanel, DashboardPanel, LogsPanel, MessageDirection, MessageEntry, MessagesPanel,
+    PanelState,
+};
 
 /// The panels available in the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +98,23 @@ impl App {
         let config_toml =
             toml::to_string_pretty(&config).unwrap_or_else(|e| format!("(error: {e})"));
 
+        let mut messages = MessagesPanel::new();
+        messages.push(MessageEntry {
+            timestamp: "00:00:00".to_string(),
+            channel: "system".to_string(),
+            direction: MessageDirection::Inbound,
+            body: "CrustyClaw TUI started".to_string(),
+        });
+        messages.push(MessageEntry {
+            timestamp: "00:00:00".to_string(),
+            channel: "system".to_string(),
+            direction: MessageDirection::Outbound,
+            body: format!(
+                "Daemon ready on {}:{}",
+                config.daemon.listen_addr, config.daemon.listen_port
+            ),
+        });
+
         Self {
             should_quit: false,
             active_panel: Panel::Dashboard,
@@ -102,7 +122,7 @@ impl App {
             keymap: KeyMapper::new(),
             dashboard: DashboardPanel::new(&config),
             logs: LogsPanel::new(log_reader),
-            messages: MessagesPanel::new(),
+            messages,
             config_panel: ConfigPanel::new(config_toml),
         }
     }
