@@ -10,3 +10,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 crustyclaw-core = { workspace = true }
+
+[dev-dependencies]
+crustyclaw-test-utils = { workspace = true }
+test-log = { workspace = true }
+pretty_assertions = { workspace = true }

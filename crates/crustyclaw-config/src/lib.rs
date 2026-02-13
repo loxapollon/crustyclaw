@@ -542,6 +542,8 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[test]
     fn test_default_config() {
@@ -655,6 +657,8 @@ mod tests {
         assert!(engine.is_allowed("anyone", "anything", "anywhere"));
     }
 
+    // ── Secrets config ──────────────────────────────────────────────
+
     #[test]
     fn test_secrets_config_from_toml() {
         let toml = r#"
@@ -748,6 +752,31 @@ mod tests {
     }
 
     #[test]
+    fn test_secrets_both_injection() {
+        let toml = r#"
+            [[secrets.entries]]
+            name = "dual_key"
+            source = "inline"
+            value = "secret-value"
+            inject_as = "both"
+            inject_env = "DUAL_KEY"
+            inject_path = "/run/secrets/dual_key"
+        "#;
+        let config = AppConfig::parse(toml).unwrap();
+        assert_eq!(config.secrets.entries[0].inject_as, "both");
+        assert_eq!(
+            config.secrets.entries[0].inject_env.as_ref().unwrap(),
+            "DUAL_KEY"
+        );
+        assert_eq!(
+            config.secrets.entries[0].inject_path.as_ref().unwrap(),
+            "/run/secrets/dual_key"
+        );
+    }
+
+    // ── Auth config ───────────────────────────────────────────────────
+
+    #[test]
     fn test_auth_config_default() {
         let config = AppConfig::default();
         assert_eq!(config.auth.mode, "local");
@@ -780,26 +809,79 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // ── Async file-based loading ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_load_from_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("crustyclaw.toml");
+        tokio::fs::write(
+            &path,
+            b"[daemon]\nlisten_port = 4242\nlisten_addr = \"0.0.0.0\"\n",
+        )
+        .await
+        .unwrap();
+
+        let config = AppConfig::load(&path).await.unwrap();
+        assert_eq!(config.daemon.listen_port, 4242);
+        assert_eq!(config.daemon.listen_addr, "0.0.0.0");
+    }
+
+    #[tokio::test]
+    async fn test_load_nonexistent_file() {
+        let result = AppConfig::load(Path::new("/nonexistent/file.toml")).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_load_invalid_toml_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("bad.toml");
+        tokio::fs::write(&path, b"not valid toml [[[")
+            .await
+            .unwrap();
+
+        let result = AppConfig::load(&path).await;
+        assert!(result.is_err());
+    }
+
+    // ── Error display ─────────────────────────────────────────────────
+
     #[test]
-    fn test_secrets_both_injection() {
+    fn test_config_error_display() {
+        let err = ConfigError::Validation("bad value".to_string());
+        assert_eq!(err.to_string(), "validation error: bad value");
+    }
+
+    // ── Isolation validation ──────────────────────────────────────────
+
+    #[test]
+    fn test_validation_rejects_invalid_backend() {
         let toml = r#"
-            [[secrets.entries]]
-            name = "dual_key"
-            source = "inline"
-            value = "secret-value"
-            inject_as = "both"
-            inject_env = "DUAL_KEY"
-            inject_path = "/run/secrets/dual_key"
+            [isolation]
+            backend = "docker"
         "#;
-        let config = AppConfig::parse(toml).unwrap();
-        assert_eq!(config.secrets.entries[0].inject_as, "both");
-        assert_eq!(
-            config.secrets.entries[0].inject_env.as_ref().unwrap(),
-            "DUAL_KEY"
-        );
-        assert_eq!(
-            config.secrets.entries[0].inject_path.as_ref().unwrap(),
-            "/run/secrets/dual_key"
-        );
+        let result = AppConfig::parse(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_zero_memory() {
+        let toml = r#"
+            [isolation]
+            default_memory_bytes = 0
+        "#;
+        let result = AppConfig::parse(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_bad_cpu_fraction() {
+        let toml = r#"
+            [isolation]
+            default_cpu_fraction = 0.0
+        "#;
+        let result = AppConfig::parse(toml);
+        assert!(result.is_err());
     }
 }

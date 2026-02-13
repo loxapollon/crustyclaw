@@ -7,6 +7,7 @@ members = [
     "crates/crustyclaw-signal",
     "crates/crustyclaw-macros",
     "crates/crustyclaw-config",
+    "crates/crustyclaw-test-utils",
 ]
 
 [workspace.package]
@@ -39,13 +40,19 @@ proc-macro2 = "1"
 # Security
 zeroize = { version = "1", features = ["derive"] }
 
-# Logging
+# Logging & tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-flame = "0.2"
 
 # Error handling
 thiserror = "2"
 anyhow = "1"
+
+# Testing
+test-log = { version = "0.2", default-features = false, features = ["trace"] }
+pretty_assertions = "1"
+tempfile = "3"
 
 # Internal crates
 crustyclaw-core = { path = "crates/crustyclaw-core" }
@@ -54,3 +61,40 @@ crustyclaw-tui = { path = "crates/crustyclaw-tui" }
 crustyclaw-signal = { path = "crates/crustyclaw-signal" }
 crustyclaw-macros = { path = "crates/crustyclaw-macros" }
 crustyclaw-config = { path = "crates/crustyclaw-config" }
+crustyclaw-test-utils = { path = "crates/crustyclaw-test-utils" }
+
+# ─── Build profiles ──────────────────────────────────────────────────────
+
+# Development: fast builds, full debug info
+[profile.dev]
+opt-level = 0
+debug = true
+
+# Optimize heavy deps even in dev for tolerable runtime perf
+[profile.dev.package.tokio]
+opt-level = 2
+
+[profile.dev.package.serde]
+opt-level = 2
+
+[profile.dev.package.ratatui]
+opt-level = 2
+
+# Release: full optimization
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+# Profiling: release-speed with debug symbols for flamegraphs / perf
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+lto = false
+
+# Bench: inherits release, keep debug info for profiling
+[profile.bench]
+debug = true

@@ -1,0 +1,15 @@
+# Cargo build configuration for CrustyClaw.
+#
+# Frame pointers are required for accurate profiling with `perf` and
+# `cargo-flamegraph`. The flag is applied globally so that profiling builds
+# (--profile profiling) produce meaningful stack traces.
+#
+# Usage:
+#   cargo build --profile profiling
+#   cargo flamegraph --profile profiling --bin crustyclaw
+
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "force-frame-pointers=yes"]
+
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "force-frame-pointers=yes"]

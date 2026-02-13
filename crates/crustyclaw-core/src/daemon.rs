@@ -191,6 +191,8 @@ pub enum DaemonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_daemon_creation() {
@@ -254,9 +256,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_config_reload_valid_file() {
-        let dir = std::env::temp_dir().join("crustyclaw-test-reload");
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        let path = dir.join("crustyclaw.toml");
+        // TempDir is cleaned up automatically on drop — even on panic
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("crustyclaw.toml");
         tokio::fs::write(
             &path,
             b"[daemon]\nlisten_addr = \"0.0.0.0\"\nlisten_port = 8080\n",
@@ -265,7 +267,7 @@ mod tests {
         .unwrap();
 
         let config = AppConfig::default();
-        let daemon = Daemon::with_config_path(config, path.clone());
+        let daemon = Daemon::with_config_path(config, path);
 
         let mut rx = daemon.config_watcher();
         assert_eq!(rx.borrow().daemon.listen_port, 9100);
@@ -276,7 +278,30 @@ mod tests {
         rx.changed().await.unwrap();
         assert_eq!(rx.borrow().daemon.listen_port, 8080);
         assert_eq!(rx.borrow().daemon.listen_addr, "0.0.0.0");
+    }
 
-        tokio::fs::remove_dir_all(&dir).await.ok();
+    #[tokio::test]
+    async fn test_config_reload_preserves_on_invalid_toml() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("crustyclaw.toml");
+
+        // Write valid config initially
+        tokio::fs::write(&path, b"[daemon]\nlisten_port = 7777\n")
+            .await
+            .unwrap();
+
+        let config = AppConfig::load(&path).await.unwrap();
+        let daemon = Daemon::with_config_path(config, path.clone());
+        assert_eq!(daemon.config().daemon.listen_port, 7777);
+
+        // Overwrite with broken TOML
+        tokio::fs::write(&path, b"this is not valid toml [[[")
+            .await
+            .unwrap();
+        daemon.reload_config().await;
+
+        // Config should remain unchanged
+        let rx = daemon.config_watcher();
+        assert_eq!(rx.borrow().daemon.listen_port, 7777);
     }
 }
