@@ -1,5 +1,5 @@
 /target
-Cargo.lock
+# Cargo.lock is committed for reproducible builds (binary crates)
 *.swp
 *.swo
 *~

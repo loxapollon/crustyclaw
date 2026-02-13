@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Build release binaries
+        run: cargo build --workspace --release
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          cp target/release/crustyclaw dist/ 2>/dev/null || true
+          cp target/release/crustyclaw-tui dist/ 2>/dev/null || true
+          tar -czf crustyclaw-$(git describe --tags).tar.gz -C dist .
+
+      - name: Generate SBOM
+        run: |
+          cargo install cargo-cyclonedx || true
+          cargo cyclonedx --all --format json > sbom.json 2>/dev/null || echo '{"note":"SBOM generation requires cargo-cyclonedx"}' > sbom.json
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            crustyclaw-*.tar.gz
+            sbom.json
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,6 +1,10 @@
 #![deny(unsafe_code)]
 
 //! CrustyClaw TUI — interactive terminal control plane.
+//!
+//! Renders a four-panel interface (Dashboard, Logs, Messages, Config) with
+//! vim-style keybindings. Connects to the daemon's log collector for live
+//! log streaming.
 
 mod app;
 mod keymap;

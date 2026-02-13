@@ -17,6 +17,7 @@ pub struct MessageEntry {
     pub body: String,
 }
 
+/// Direction of a message on the bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum MessageDirection {
@@ -24,6 +25,7 @@ pub enum MessageDirection {
     Outbound,
 }
 
+/// Message panel state — scrollable list of inbound/outbound messages.
 pub struct MessagesPanel {
     entries: Vec<MessageEntry>,
     scroll_offset: usize,

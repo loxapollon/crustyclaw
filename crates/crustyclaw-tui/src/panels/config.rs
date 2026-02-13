@@ -7,6 +7,7 @@ use ratatui::{
 
 use super::PanelState;
 
+/// Configuration viewer panel with TOML syntax highlighting.
 pub struct ConfigPanel {
     /// The rendered TOML text (split into lines).
     lines: Vec<String>,

@@ -6,6 +6,7 @@
 //! Provides the [`AppConfig`] type as the central configuration structure,
 //! and the [`policy`] module for role-based access control.
 
+/// Role-based access control policy engine.
 pub mod policy;
 
 use std::path::Path;
