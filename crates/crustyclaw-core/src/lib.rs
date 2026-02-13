@@ -12,6 +12,8 @@ pub mod auth;
 pub mod build_info;
 /// Async daemon runtime and message bus.
 pub mod daemon;
+/// Apple Virtualization–style sandbox isolation for skills.
+pub mod isolation;
 /// In-memory log collector for the TUI.
 pub mod logging;
 /// Message envelope types for the internal bus.
@@ -24,5 +26,6 @@ pub mod security;
 pub mod skill;
 
 pub use daemon::Daemon;
+pub use isolation::{Sandbox, SandboxBackend, SandboxConfig};
 pub use logging::{LogCollector, LogReader};
 pub use plugin::PluginRegistry;
