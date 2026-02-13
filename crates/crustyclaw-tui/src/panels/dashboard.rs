@@ -10,6 +10,7 @@ use ratatui::{
 
 use super::PanelState;
 
+/// Dashboard panel state — shows daemon uptime, listen address, channel status.
 pub struct DashboardPanel {
     pub uptime: Duration,
     pub listen_addr: String,

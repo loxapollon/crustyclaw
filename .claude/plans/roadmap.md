@@ -92,19 +92,20 @@ crustyclaw/
 - [ ] `workflow_step!{}` macro — deferred
 - [ ] `action_integration_test!` declarative macro — deferred
 
-## Phase 7 — Hardening & Supply Chain
-- [ ] `cargo-vet` or `cargo-crev` integration
-- [ ] Dependency pinning and reproducible builds
-- [ ] Fuzz testing harness (`cargo-fuzz` / `afl`)
-- [ ] SBOM generation in CI
-- [ ] Threat model documentation
+## Phase 7 — Hardening & Supply Chain (Complete)
+- [x] Enhanced CI: MSRV check (1.75.0), `cargo-deny` licenses/advisories, `-D warnings`
+- [x] Cargo.lock committed for reproducible builds
+- [x] Fuzz testing harness (`cargo-fuzz`): config parser + policy engine targets
+- [x] SBOM generation in release workflow (`cargo-cyclonedx`)
+- [x] Threat model documentation (`docs/THREAT_MODEL.md`)
+- [ ] `cargo-vet` or `cargo-crev` integration — deferred
 
-## Phase 8 — Documentation & Release
-- [ ] Crate-level and public-API docs (`cargo doc`)
-- [ ] CLI + TUI user documentation
-- [ ] Extension authoring guide (Forgejo Action plugins)
-- [ ] Signal setup guide
-- [ ] Versioned releases via Forgejo Actions
+## Phase 8 — Documentation & Release (Complete)
+- [x] Crate-level and public-API docs across all crates
+- [x] CLI expansion: `version`, `policy`, `plugins` subcommands with rich output
+- [x] Versioned release workflow via Forgejo Actions (`.forgejo/workflows/release.yml`)
+- [ ] Extension authoring guide (Forgejo Action plugins) — deferred
+- [ ] Signal setup guide — deferred (pending protocol integration)
 
 ---
 

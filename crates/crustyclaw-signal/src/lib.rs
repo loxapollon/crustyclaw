@@ -17,9 +17,13 @@
 //! - **Rate limiter**: [`RateLimiter`] protects against abuse with a token-bucket
 //!   algorithm.
 
+/// Type-state Signal adapter (`Unlinked → Linked → Verified`).
 pub mod adapter;
+/// Signal message, attachment, and group types.
 pub mod message;
+/// Token-bucket rate limiter for abuse protection.
 pub mod rate_limit;
+/// Async service bridging Signal to the daemon message bus.
 pub mod service;
 
 pub use adapter::SignalAdapter;

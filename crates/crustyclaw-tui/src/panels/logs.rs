@@ -9,6 +9,7 @@ use tracing::Level;
 
 use super::PanelState;
 
+/// Scrollable log viewer panel with auto-follow.
 pub struct LogsPanel {
     reader: LogReader,
     /// Cached snapshot of log entries (refreshed on tick).
