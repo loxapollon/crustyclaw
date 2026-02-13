@@ -21,7 +21,7 @@ mod security_policy;
 mod validate;
 
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, DeriveInput};
+use syn::{DeriveInput, parse_macro_input};
 
 /// Derive macro for redacting sensitive fields in Debug output.
 ///

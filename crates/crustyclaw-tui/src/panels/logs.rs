@@ -139,3 +139,105 @@ impl PanelState for LogsPanel {
         self.auto_follow = true;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    fn make_logs_panel_with_entries(count: usize) -> LogsPanel {
+        let collector = crustyclaw_core::LogCollector::new(1000);
+        let reader = collector.reader();
+
+        // Emit tracing events so the collector captures them
+        let subscriber = tracing_subscriber::registry().with(collector);
+        let _guard = tracing::subscriber::set_default(subscriber);
+        for i in 0..count {
+            tracing::info!("test log entry {i}");
+        }
+
+        let mut panel = LogsPanel::new(reader);
+        panel.refresh();
+        panel
+    }
+
+    #[test]
+    fn test_new_panel_starts_empty() {
+        let collector = crustyclaw_core::LogCollector::new(100);
+        let panel = LogsPanel::new(collector.reader());
+        assert_eq!(panel.entries.len(), 0);
+        assert!(panel.auto_follow);
+        assert_eq!(panel.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_refresh_captures_entries() {
+        let panel = make_logs_panel_with_entries(5);
+        assert_eq!(panel.entries.len(), 5);
+    }
+
+    #[test]
+    fn test_auto_follow_enabled_by_default() {
+        let panel = make_logs_panel_with_entries(3);
+        assert!(panel.auto_follow);
+        assert_eq!(panel.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_up_disables_auto_follow() {
+        let mut panel = make_logs_panel_with_entries(20);
+        assert!(panel.auto_follow);
+
+        panel.scroll_up(5);
+        assert!(!panel.auto_follow);
+        assert_eq!(panel.scroll_offset, 5);
+    }
+
+    #[test]
+    fn test_scroll_down_re_enables_auto_follow_at_bottom() {
+        let mut panel = make_logs_panel_with_entries(20);
+
+        panel.scroll_up(3);
+        assert!(!panel.auto_follow);
+
+        // Scroll down past bottom
+        panel.scroll_down(10);
+        assert!(panel.auto_follow);
+        assert_eq!(panel.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_to_top() {
+        let mut panel = make_logs_panel_with_entries(20);
+        panel.scroll_to_top();
+        assert!(!panel.auto_follow);
+        assert_eq!(panel.scroll_offset, 19); // len - 1
+    }
+
+    #[test]
+    fn test_scroll_to_bottom() {
+        let mut panel = make_logs_panel_with_entries(20);
+        panel.scroll_up(10);
+        panel.scroll_to_bottom();
+        assert!(panel.auto_follow);
+        assert_eq!(panel.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_up_clamped_to_max() {
+        let mut panel = make_logs_panel_with_entries(5);
+        panel.scroll_up(100);
+        assert_eq!(panel.scroll_offset, 4); // clamped to len - 1
+    }
+
+    #[test]
+    fn test_scroll_on_empty_panel() {
+        let collector = crustyclaw_core::LogCollector::new(100);
+        let mut panel = LogsPanel::new(collector.reader());
+        // Should not panic
+        panel.scroll_up(5);
+        panel.scroll_down(5);
+        panel.scroll_to_top();
+        panel.scroll_to_bottom();
+    }
+}

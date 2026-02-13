@@ -374,9 +374,9 @@ fn default_auth_mode() -> String {
 }
 
 impl AppConfig {
-    /// Load configuration from a TOML file at the given path.
-    pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        let content = std::fs::read_to_string(path)?;
+    /// Load configuration from a TOML file at the given path using async I/O.
+    pub async fn load(path: &Path) -> Result<Self, ConfigError> {
+        let content = tokio::fs::read_to_string(path).await?;
         let config: AppConfig = toml::from_str(&content)?;
         config.validate()?;
         Ok(config)

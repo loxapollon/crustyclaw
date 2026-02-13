@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use crustyclaw_macros::{action_hook, ActionPlugin, Redact, SecureZeroize, Validate};
+use crustyclaw_macros::{ActionPlugin, Redact, SecureZeroize, Validate, action_hook};
 
 // ── Redact tests ──────────────────────────────────────────────────
 

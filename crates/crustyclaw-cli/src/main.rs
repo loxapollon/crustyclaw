@@ -111,17 +111,17 @@ async fn main() -> Result<()> {
         Commands::Start => cmd_start(&cli.config).await?,
         Commands::Stop => cmd_stop().await?,
         Commands::Status => cmd_status().await?,
-        Commands::Config { show } => cmd_config(&cli.config, show)?,
+        Commands::Config { show } => cmd_config(&cli.config, show).await?,
         Commands::Version => cmd_version(),
         Commands::Policy {
             role,
             action,
             resource,
-        } => cmd_policy(&cli.config, &role, &action, &resource)?,
+        } => cmd_policy(&cli.config, &role, &action, &resource).await?,
         Commands::Plugins => cmd_plugins()?,
-        Commands::Isolation => cmd_isolation(&cli.config)?,
-        Commands::Whoami => cmd_whoami(&cli.config)?,
-        Commands::Secrets => cmd_secrets(&cli.config)?,
+        Commands::Isolation => cmd_isolation(&cli.config).await?,
+        Commands::Whoami => cmd_whoami(&cli.config).await?,
+        Commands::Secrets => cmd_secrets(&cli.config).await?,
     }
 
     Ok(())
@@ -159,7 +159,7 @@ fn transparent_auth(
 }
 
 async fn cmd_start(config_path: &Path) -> Result<()> {
-    let config = load_config(config_path)?;
+    let config = load_config(config_path).await?;
 
     // Transparent auth — authenticate the operator starting the daemon
     let session = transparent_auth(&config);
@@ -171,7 +171,7 @@ async fn cmd_start(config_path: &Path) -> Result<()> {
 
     info!("Starting CrustyClaw daemon");
 
-    let daemon = crustyclaw_core::Daemon::new(config);
+    let daemon = crustyclaw_core::Daemon::with_config_path(config, config_path.to_path_buf());
     daemon.run().await.map_err(|e| anyhow::anyhow!(e))?;
 
     Ok(())
@@ -189,8 +189,8 @@ async fn cmd_status() -> Result<()> {
     Ok(())
 }
 
-fn cmd_config(config_path: &Path, show: bool) -> Result<()> {
-    let config = load_config(config_path)?;
+async fn cmd_config(config_path: &Path, show: bool) -> Result<()> {
+    let config = load_config(config_path).await?;
     if show {
         let toml_str =
             toml::to_string_pretty(&config).map_err(|e| anyhow::anyhow!("TOML error: {e}"))?;
@@ -228,8 +228,8 @@ fn cmd_version() {
     println!("  Profile:  {}", crustyclaw_core::build_info::BUILD_PROFILE);
 }
 
-fn cmd_policy(config_path: &Path, role: &str, action: &str, resource: &str) -> Result<()> {
-    let config = load_config(config_path)?;
+async fn cmd_policy(config_path: &Path, role: &str, action: &str, resource: &str) -> Result<()> {
+    let config = load_config(config_path).await?;
     let mut engine = config.build_policy_engine();
 
     let decision = engine.evaluate(role, action, resource);
@@ -261,8 +261,8 @@ fn cmd_plugins() -> Result<()> {
     Ok(())
 }
 
-fn cmd_isolation(config_path: &Path) -> Result<()> {
-    let config = load_config(config_path)?;
+async fn cmd_isolation(config_path: &Path) -> Result<()> {
+    let config = load_config(config_path).await?;
     let iso = &config.isolation;
 
     // Select backend and probe availability
@@ -303,8 +303,8 @@ fn cmd_isolation(config_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_whoami(config_path: &Path) -> Result<()> {
-    let config = load_config(config_path)?;
+async fn cmd_whoami(config_path: &Path) -> Result<()> {
+    let config = load_config(config_path).await?;
 
     // Perform transparent authentication
     let session = transparent_auth(&config);
@@ -342,8 +342,8 @@ fn cmd_whoami(config_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_secrets(config_path: &Path) -> Result<()> {
-    let config = load_config(config_path)?;
+async fn cmd_secrets(config_path: &Path) -> Result<()> {
+    let config = load_config(config_path).await?;
 
     if config.secrets.entries.is_empty() {
         println!("No secrets configured.");
@@ -373,9 +373,11 @@ fn cmd_secrets(config_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn load_config(path: &Path) -> Result<crustyclaw_config::AppConfig> {
-    if path.exists() {
-        crustyclaw_config::AppConfig::load(path).map_err(|e| anyhow::anyhow!(e))
+async fn load_config(path: &Path) -> Result<crustyclaw_config::AppConfig> {
+    if tokio::fs::try_exists(path).await.unwrap_or(false) {
+        crustyclaw_config::AppConfig::load(path)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
     } else {
         info!(path = %path.display(), "Config file not found, using defaults");
         Ok(crustyclaw_config::AppConfig::default())

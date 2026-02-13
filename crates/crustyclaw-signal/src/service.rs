@@ -5,9 +5,9 @@ use tracing::{info, warn};
 
 use crustyclaw_core::message::{Direction, Envelope};
 
+use crate::SignalError;
 use crate::message::SignalMessage;
 use crate::rate_limit::{RateLimitConfig, RateLimiter};
-use crate::SignalError;
 
 /// Commands that can be sent to the Signal service.
 #[derive(Debug)]
