@@ -3,7 +3,10 @@
 //! Configuration loading, validation, and policy engine for CrustyClaw.
 //!
 //! Loads TOML configuration files and validates them against expected schemas.
-//! Provides the [`AppConfig`] type as the central configuration structure.
+//! Provides the [`AppConfig`] type as the central configuration structure,
+//! and the [`policy`] module for role-based access control.
+
+pub mod policy;
 
 use std::path::Path;
 
@@ -36,6 +39,42 @@ pub struct AppConfig {
     /// Logging configuration.
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    /// Security policy rules loaded from config.
+    #[serde(default)]
+    pub policy: PolicyConfig,
+}
+
+/// Security policy rules that can be defined in TOML.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct PolicyConfig {
+    /// Default effect when no rule matches ("deny" or "allow").
+    #[serde(default = "default_policy_default")]
+    pub default_effect: String,
+
+    /// Policy rules.
+    #[serde(default)]
+    pub rules: Vec<PolicyRuleConfig>,
+}
+
+/// A single policy rule as expressed in TOML.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyRuleConfig {
+    /// Role (e.g. "admin", "user", "*").
+    pub role: String,
+    /// Action (e.g. "read", "write", "*").
+    pub action: String,
+    /// Resource (e.g. "config", "skills", "*").
+    pub resource: String,
+    /// Effect ("allow" or "deny").
+    pub effect: String,
+    /// Priority (higher = evaluated first).
+    #[serde(default)]
+    pub priority: u32,
+}
+
+fn default_policy_default() -> String {
+    "deny".to_string()
 }
 
 /// Configuration for the core daemon.
@@ -140,7 +179,53 @@ impl AppConfig {
                 "daemon.listen_addr must not be empty".to_string(),
             ));
         }
+        // Validate policy rules
+        for (i, rule) in self.policy.rules.iter().enumerate() {
+            if rule.effect != "allow" && rule.effect != "deny" {
+                return Err(ConfigError::Validation(format!(
+                    "policy.rules[{i}].effect must be \"allow\" or \"deny\", got {:?}",
+                    rule.effect
+                )));
+            }
+            if rule.role.is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "policy.rules[{i}].role must not be empty"
+                )));
+            }
+        }
         Ok(())
+    }
+
+    /// Build a [`PolicyEngine`](policy::PolicyEngine) from the loaded policy config.
+    pub fn build_policy_engine(&self) -> policy::PolicyEngine {
+        let rules: Vec<policy::PolicyRule> = self
+            .policy
+            .rules
+            .iter()
+            .map(|r| {
+                let effect = if r.effect == "allow" {
+                    policy::Effect::Allow
+                } else {
+                    policy::Effect::Deny
+                };
+                policy::PolicyRule {
+                    role: r.role.clone(),
+                    action: r.action.clone(),
+                    resource: r.resource.clone(),
+                    effect,
+                    priority: r.priority,
+                }
+            })
+            .collect();
+
+        let mut engine = policy::build_policy(rules);
+
+        // Add default deny/allow rule at lowest priority
+        if self.policy.default_effect == "allow" {
+            engine.add_rule(policy::PolicyRule::allow("*", "*", "*").with_priority(0));
+        }
+
+        engine
     }
 }
 
@@ -203,5 +288,60 @@ mod tests {
         "#;
         let result = AppConfig::parse(toml);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_policy_config_from_toml() {
+        let toml = r#"
+            [policy]
+            default_effect = "deny"
+
+            [[policy.rules]]
+            role = "admin"
+            action = "*"
+            resource = "*"
+            effect = "allow"
+            priority = 10
+
+            [[policy.rules]]
+            role = "user"
+            action = "read"
+            resource = "config"
+            effect = "allow"
+            priority = 5
+        "#;
+        let config = AppConfig::parse(toml).unwrap();
+        assert_eq!(config.policy.rules.len(), 2);
+        assert_eq!(config.policy.default_effect, "deny");
+
+        let mut engine = config.build_policy_engine();
+        assert!(engine.is_allowed("admin", "write", "secrets"));
+        assert!(engine.is_allowed("user", "read", "config"));
+        assert!(!engine.is_allowed("user", "write", "config"));
+    }
+
+    #[test]
+    fn test_policy_validation_rejects_bad_effect() {
+        let toml = r#"
+            [[policy.rules]]
+            role = "admin"
+            action = "*"
+            resource = "*"
+            effect = "maybe"
+        "#;
+        let result = AppConfig::parse(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_policy_default_allow() {
+        let toml = r#"
+            [policy]
+            default_effect = "allow"
+        "#;
+        let config = AppConfig::parse(toml).unwrap();
+        let mut engine = config.build_policy_engine();
+        // With default allow, everything is permitted
+        assert!(engine.is_allowed("anyone", "anything", "anywhere"));
     }
 }

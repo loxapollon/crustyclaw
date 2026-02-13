@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use crustyclaw_macros::{Redact, SecureZeroize, Validate};
+use crustyclaw_macros::{action_hook, ActionPlugin, Redact, SecureZeroize, Validate};
 
 // ── Redact tests ──────────────────────────────────────────────────
 
@@ -194,4 +194,87 @@ fn test_combined_redact_and_validate() {
     assert!(debug.contains("github"));
     assert!(!debug.contains("ghp_"));
     assert!(debug.contains("[REDACTED]"));
+}
+
+// ── ActionPlugin tests ──────────────────────────────────────────
+
+#[derive(ActionPlugin)]
+#[action(name = "greeting", version = "1.0.0", description = "Says hello")]
+struct GreetAction {
+    #[action_input(required)]
+    pub name: String,
+    #[action_input(default = "Hello")]
+    pub greeting: String,
+}
+
+#[test]
+fn test_action_plugin_metadata() {
+    assert_eq!(GreetAction::plugin_name(), "greeting");
+    assert_eq!(GreetAction::plugin_version(), "1.0.0");
+    assert_eq!(GreetAction::plugin_description(), "Says hello");
+    assert_eq!(GreetAction::input_names(), &["name", "greeting"]);
+}
+
+#[derive(ActionPlugin)]
+struct MinimalPlugin {
+    pub value: String,
+}
+
+#[test]
+fn test_action_plugin_defaults() {
+    // Without #[action(...)] attrs, uses struct name lowered as name
+    assert_eq!(MinimalPlugin::plugin_name(), "minimalplugin");
+    assert_eq!(MinimalPlugin::plugin_version(), "0.1.0");
+}
+
+// ── action_hook tests ───────────────────────────────────────────
+
+#[action_hook(event = "on_message", priority = 10)]
+fn handle_greeting(msg: &str) -> String {
+    format!("Hello, {msg}!")
+}
+
+#[test]
+fn test_action_hook_function_works() {
+    assert_eq!(handle_greeting("world"), "Hello, world!");
+}
+
+#[test]
+fn test_action_hook_registration_const() {
+    // The macro generates a const with metadata
+    assert_eq!(__HOOK_REG_HANDLE_GREETING.0, "handle_greeting");
+    assert_eq!(__HOOK_REG_HANDLE_GREETING.1, "on_message");
+    assert_eq!(__HOOK_REG_HANDLE_GREETING.2, 10);
+}
+
+// ── security_policy! tests ──────────────────────────────────────
+
+#[test]
+fn test_security_policy_macro() {
+    let mut engine = crustyclaw_macros::security_policy! {
+        allow admin * *;
+        allow user read config;
+        deny user write secrets [priority = 100];
+        deny * * * [priority = 0];
+    };
+
+    // Admin can do anything
+    assert!(engine.is_allowed("admin", "write", "secrets"));
+
+    // User can read config
+    assert!(engine.is_allowed("user", "read", "config"));
+
+    // User denied write to secrets (priority 100 beats allow at 0)
+    assert!(!engine.is_allowed("user", "write", "secrets"));
+
+    // Unknown role is denied by default (deny * * *)
+    assert!(!engine.is_allowed("guest", "read", "anything"));
+}
+
+#[test]
+fn test_security_policy_macro_empty() {
+    let mut engine = crustyclaw_macros::security_policy! {};
+
+    // No rules = no match = not allowed
+    assert!(!engine.is_allowed("admin", "read", "anything"));
 }

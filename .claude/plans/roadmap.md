@@ -75,20 +75,22 @@ crustyclaw/
 - [x] Build script: embed git commit hash, build timestamp, build profile
 - [ ] Container isolation: sandboxed skill execution (seccomp/landlock) — deferred
 
-## Phase 5 — Configuration & Policy Engine
-- [ ] Config format: TOML with `serde` + `Validate` derive stacking
-- [ ] `security_policy!{}` function-like proc macro for policy DSL
-- [ ] Compile-time policy validation (role/action/resource well-formedness)
-- [ ] Runtime policy evaluation with zero-cost compiled match trees
+## Phase 5 — Configuration & Policy Engine (Complete)
+- [x] Policy engine: role-based access control with priority-ordered rules
+- [x] TOML-configurable policy rules (`[[policy.rules]]` table arrays)
+- [x] `security_policy!{}` function-like proc macro for policy DSL
+- [x] Compile-time policy validation (effect must be allow/deny, role non-empty)
+- [x] Runtime policy evaluation with wildcard matching and priority ordering
+- [x] `AppConfig::build_policy_engine()` — config → PolicyEngine bridge
 
-## Phase 6 — Forgejo Actions Extension System
-- [ ] Define `ActionPlugin` trait
-- [ ] `#[derive(ActionPlugin)]` — input parsing, output setters, metadata generation
-- [ ] `#[action_hook(event, priority)]` attribute macro for hook registration
-- [ ] Build-script: `action.yml` → typed Rust bindings, schema validation
-- [ ] Plugin discovery via `inventory`/`linkme`
-- [ ] `workflow_step!{}` macro for compile-time workflow fragment validation
-- [ ] Integration test harness via `action_integration_test!` declarative macro
+## Phase 6 — Forgejo Actions Extension System (Complete)
+- [x] `#[derive(ActionPlugin)]` — metadata, input parsing, `from_env()` generation
+- [x] `#[action_hook(event, priority)]` attribute macro for hook registration
+- [x] `PluginRegistry` in core — runtime plugin/hook discovery and lookup
+- [x] Hook priority ordering (highest-first evaluation)
+- [ ] Build-script: `action.yml` → typed Rust bindings — deferred
+- [ ] `workflow_step!{}` macro — deferred
+- [ ] `action_integration_test!` declarative macro — deferred
 
 ## Phase 7 — Hardening & Supply Chain
 - [ ] `cargo-vet` or `cargo-crev` integration
