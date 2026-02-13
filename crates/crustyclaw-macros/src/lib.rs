@@ -2,17 +2,22 @@
 
 //! Procedural macros for CrustyClaw.
 //!
-//! This crate provides derive and attribute macros used across the CrustyClaw
-//! workspace:
+//! This crate provides derive, attribute, and function-like proc macros:
 //!
 //! - `#[derive(Redact)]` — auto-redact sensitive fields in Debug output
 //! - `#[derive(Validate)]` — generate a `validate()` method from field annotations
 //! - `#[derive(SecureZeroize)]` — zeroize sensitive memory on Drop
+//! - `#[derive(ActionPlugin)]` — Forgejo Action plugin scaffolding
+//! - `#[action_hook(event, priority)]` — hook registration attribute
+//! - `security_policy!{}` — DSL for defining security policies
 
 extern crate proc_macro;
 
+mod action_hook;
+mod action_plugin;
 mod redact;
 mod secure_zeroize;
+mod security_policy;
 mod validate;
 
 use proc_macro::TokenStream;
@@ -103,4 +108,71 @@ pub fn derive_secure_zeroize(input: TokenStream) -> TokenStream {
     secure_zeroize::expand(input)
         .unwrap_or_else(|e| e.to_compile_error())
         .into()
+}
+
+/// Derive macro for Forgejo Action plugin scaffolding.
+///
+/// Generates `plugin_name()`, `plugin_version()`, `plugin_description()`,
+/// `input_names()`, and `from_env()` methods.
+///
+/// # Example
+///
+/// ```ignore
+/// use crustyclaw_macros::ActionPlugin;
+///
+/// #[derive(ActionPlugin)]
+/// #[action(name = "greeting", version = "1.0.0", description = "Says hello")]
+/// struct GreetAction {
+///     #[action_input(required)]
+///     pub name: String,
+///     #[action_input(default = "Hello")]
+///     pub greeting: String,
+/// }
+/// ```
+#[proc_macro_derive(ActionPlugin, attributes(action, action_input))]
+pub fn derive_action_plugin(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    action_plugin::expand(input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
+
+/// Attribute macro for registering action hooks.
+///
+/// Annotates a function as a hook handler for a specific event type,
+/// generating static registration metadata.
+///
+/// # Example
+///
+/// ```ignore
+/// use crustyclaw_macros::action_hook;
+///
+/// #[action_hook(event = "on_message", priority = 10)]
+/// fn handle_greeting(msg: &str) -> String {
+///     format!("Hello, {msg}!")
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn action_hook(attr: TokenStream, item: TokenStream) -> TokenStream {
+    action_hook::expand(attr, item)
+}
+
+/// Function-like proc macro for defining security policies with a DSL.
+///
+/// Parses a list of `allow`/`deny` rules and generates a `PolicyEngine`.
+///
+/// # Example
+///
+/// ```ignore
+/// use crustyclaw_macros::security_policy;
+///
+/// let engine = security_policy! {
+///     allow admin * *;
+///     allow user read config;
+///     deny * write secrets [priority = 100];
+/// };
+/// ```
+#[proc_macro]
+pub fn security_policy(input: TokenStream) -> TokenStream {
+    security_policy::expand(input)
 }

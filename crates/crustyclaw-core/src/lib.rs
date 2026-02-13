@@ -11,8 +11,10 @@ pub mod build_info;
 pub mod daemon;
 pub mod logging;
 pub mod message;
+pub mod plugin;
 pub mod security;
 pub mod skill;
 
 pub use daemon::Daemon;
 pub use logging::{LogCollector, LogReader};
+pub use plugin::PluginRegistry;
