@@ -1,6 +1,11 @@
 //! Type-state Signal adapter — enforces `Unlinked → Linked → Verified` lifecycle.
+//!
+//! State transitions (`link`, `verify`) are async because a real Signal protocol
+//! implementation performs network I/O during account linking and verification.
 
 use tracing::info;
+
+use crate::SignalError;
 
 /// Signal adapter session states.
 pub mod session {
@@ -37,11 +42,18 @@ impl SignalAdapter<session::Unlinked> {
     }
 
     /// Link to a Signal account. Returns the adapter in `Linked` state.
-    pub fn link(self, phone_number: String) -> SignalAdapter<session::Linked> {
+    ///
+    /// This is async because the real Signal protocol performs network I/O
+    /// during the linking handshake.
+    pub async fn link(
+        self,
+        phone_number: String,
+    ) -> Result<SignalAdapter<session::Linked>, SignalError> {
         info!(phone = %phone_number, "Linking Signal account");
-        SignalAdapter {
+        // TODO: actual Signal protocol linking handshake (network I/O)
+        Ok(SignalAdapter {
             state: session::Linked { phone_number },
-        }
+        })
     }
 }
 
@@ -53,13 +65,17 @@ impl Default for SignalAdapter<session::Unlinked> {
 
 impl SignalAdapter<session::Linked> {
     /// Verify the linked Signal account. Returns the adapter in `Verified` state.
-    pub fn verify(self) -> SignalAdapter<session::Verified> {
+    ///
+    /// This is async because the real Signal protocol performs network I/O
+    /// during verification (e.g. safety-number exchange).
+    pub async fn verify(self) -> Result<SignalAdapter<session::Verified>, SignalError> {
         info!(phone = %self.state.phone_number, "Verifying Signal account");
-        SignalAdapter {
+        // TODO: actual Signal protocol verification (network I/O)
+        Ok(SignalAdapter {
             state: session::Verified {
                 phone_number: self.state.phone_number,
             },
-        }
+        })
     }
 
     /// Get the phone number this adapter is linked to.
@@ -79,12 +95,12 @@ impl SignalAdapter<session::Verified> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_type_state_lifecycle() {
+    #[tokio::test]
+    async fn test_type_state_lifecycle() {
         let adapter = SignalAdapter::new();
-        let linked = adapter.link("+1234567890".to_string());
+        let linked = adapter.link("+1234567890".to_string()).await.unwrap();
         assert_eq!(linked.phone_number(), "+1234567890");
-        let verified = linked.verify();
+        let verified = linked.verify().await.unwrap();
         assert_eq!(verified.phone_number(), "+1234567890");
     }
 

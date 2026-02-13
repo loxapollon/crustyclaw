@@ -11,8 +11,8 @@ Operators manage it via a CLI and TUI.
 
 ## Architecture
 
-- **Language:** Rust (latest stable), `#![deny(unsafe_code)]`
-- **Core:** Async daemon (`tokio`) — message routing, skill execution, LLM integration
+- **Language:** Rust 1.93+ (edition 2024), `#![deny(unsafe_code)]`
+- **Core:** Full-async daemon (`tokio`) — message routing, skill execution, LLM integration, OS signal handling (SIGHUP/SIGTERM)
 - **Control plane:** CLI (`clap`) for scripting + TUI (`ratatui`) for interactive ops
 - **User channel:** Signal (end-to-end encrypted messaging)
 - **Extension model:** Forgejo Actions — plugins run as sandboxed CI/CD workflows
@@ -31,6 +31,7 @@ crustyclaw/
 │   ├── crustyclaw-signal/      # Signal protocol channel adapter
 │   ├── crustyclaw-macros/      # proc-macro crate (derive, attribute macros)
 │   └── crustyclaw-config/      # config loading, validation, policy engine
+├── docs/                       # user documentation
 ├── actions/                    # Forgejo Action extension definitions
 ├── .forgejo/workflows/         # CI/CD pipelines
 └── .claude/plans/              # roadmap and planning docs

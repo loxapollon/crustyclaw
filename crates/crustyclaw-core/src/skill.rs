@@ -5,10 +5,15 @@
 
 use std::collections::HashMap;
 
+use crate::BoxFuture;
 use crate::isolation::{self, SandboxConfig};
 use crate::message::Envelope;
 
 /// A skill that the agent can execute in response to messages.
+///
+/// The [`execute`](Skill::execute) method returns a [`BoxFuture`] because this
+/// trait is used via `dyn Skill` (dynamic dispatch), which requires a concrete
+/// return type. Native `async fn` in traits is not object-safe.
 pub trait Skill: Send + Sync {
     /// The unique name of this skill.
     fn name(&self) -> &str;
@@ -22,10 +27,7 @@ pub trait Skill: Send + Sync {
     }
 
     /// Execute the skill with the given message, returning a response body.
-    fn execute(
-        &self,
-        message: &Envelope,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, SkillError>> + Send + '_>>;
+    fn execute(&self, message: &Envelope) -> BoxFuture<'_, Result<String, SkillError>>;
 }
 
 /// Errors from skill execution.
@@ -125,11 +127,7 @@ impl Skill for IsolatedSkill {
         true
     }
 
-    fn execute(
-        &self,
-        message: &Envelope,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, SkillError>> + Send + '_>>
-    {
+    fn execute(&self, message: &Envelope) -> BoxFuture<'_, Result<String, SkillError>> {
         let body = message.body.clone();
         let channel = message.channel.clone();
 

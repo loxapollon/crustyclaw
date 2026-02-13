@@ -6,6 +6,18 @@
 //! and LLM integration. The daemon is the central process that all other components
 //! (CLI, TUI, Signal adapter) communicate with.
 
+use std::future::Future;
+use std::pin::Pin;
+
+/// A type-erased, `Send`-safe, boxed future — the standard return type for async
+/// trait methods that require dynamic dispatch (`dyn Trait`).
+///
+/// Native `async fn` in traits (stable since Rust 1.75) produces opaque return
+/// types that are **not** object-safe. Traits consumed via `Box<dyn Trait>` or
+/// `&dyn Trait` must return a concrete `Pin<Box<dyn Future>>` instead. This
+/// alias keeps those signatures readable.
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
 /// Type-state authentication lifecycle (`Unauthenticated → Authenticated → Authorized`).
 /// Includes transparent local-identity authentication for CLI/TUI.
 pub mod auth;

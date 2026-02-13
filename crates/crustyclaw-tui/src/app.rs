@@ -151,3 +151,150 @@ impl App {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keymap::Action;
+
+    fn make_app() -> App {
+        let config = AppConfig::default();
+        let collector = crustyclaw_core::LogCollector::new(100);
+        let reader = collector.reader();
+        App::new(config, reader)
+    }
+
+    // ── Panel enum tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_panel_titles() {
+        assert_eq!(Panel::Dashboard.title(), "Dashboard");
+        assert_eq!(Panel::Logs.title(), "Logs");
+        assert_eq!(Panel::Messages.title(), "Messages");
+        assert_eq!(Panel::Config.title(), "Config");
+    }
+
+    #[test]
+    fn test_panel_indices() {
+        assert_eq!(Panel::Dashboard.index(), 0);
+        assert_eq!(Panel::Logs.index(), 1);
+        assert_eq!(Panel::Messages.index(), 2);
+        assert_eq!(Panel::Config.index(), 3);
+    }
+
+    #[test]
+    fn test_panel_next_wraps() {
+        assert_eq!(Panel::Dashboard.next(), Panel::Logs);
+        assert_eq!(Panel::Logs.next(), Panel::Messages);
+        assert_eq!(Panel::Messages.next(), Panel::Config);
+        assert_eq!(Panel::Config.next(), Panel::Dashboard);
+    }
+
+    #[test]
+    fn test_panel_prev_wraps() {
+        assert_eq!(Panel::Dashboard.prev(), Panel::Config);
+        assert_eq!(Panel::Config.prev(), Panel::Messages);
+        assert_eq!(Panel::Messages.prev(), Panel::Logs);
+        assert_eq!(Panel::Logs.prev(), Panel::Dashboard);
+    }
+
+    // ── App creation ──────────────────────────────────────────────
+
+    #[test]
+    fn test_app_defaults() {
+        let app = make_app();
+        assert!(!app.should_quit);
+        assert_eq!(app.active_panel, Panel::Dashboard);
+    }
+
+    // ── Action handling ───────────────────────────────────────────
+
+    #[test]
+    fn test_quit_action() {
+        let mut app = make_app();
+        app.handle_action(Action::Quit);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_next_prev_panel() {
+        let mut app = make_app();
+        assert_eq!(app.active_panel, Panel::Dashboard);
+
+        app.handle_action(Action::NextPanel);
+        assert_eq!(app.active_panel, Panel::Logs);
+
+        app.handle_action(Action::PrevPanel);
+        assert_eq!(app.active_panel, Panel::Dashboard);
+    }
+
+    #[test]
+    fn test_goto_panel() {
+        let mut app = make_app();
+
+        app.handle_action(Action::GoToPanel(2));
+        assert_eq!(app.active_panel, Panel::Messages);
+
+        app.handle_action(Action::GoToPanel(0));
+        assert_eq!(app.active_panel, Panel::Dashboard);
+
+        // Out of bounds — no change
+        app.handle_action(Action::GoToPanel(99));
+        assert_eq!(app.active_panel, Panel::Dashboard);
+    }
+
+    #[test]
+    fn test_full_panel_cycle() {
+        let mut app = make_app();
+        for _ in 0..4 {
+            app.handle_action(Action::NextPanel);
+        }
+        // Should wrap back to Dashboard
+        assert_eq!(app.active_panel, Panel::Dashboard);
+    }
+
+    #[test]
+    fn test_scroll_actions_no_panic() {
+        let mut app = make_app();
+        // Scroll on each panel to exercise all PanelState impls
+        for i in 0..4 {
+            app.handle_action(Action::GoToPanel(i));
+            app.handle_action(Action::ScrollDown);
+            app.handle_action(Action::ScrollUp);
+            app.handle_action(Action::HalfPageDown);
+            app.handle_action(Action::HalfPageUp);
+            app.handle_action(Action::ScrollToTop);
+            app.handle_action(Action::ScrollToBottom);
+        }
+    }
+
+    #[test]
+    fn test_none_action_is_noop() {
+        let mut app = make_app();
+        let panel_before = app.active_panel;
+        app.handle_action(Action::None);
+        assert_eq!(app.active_panel, panel_before);
+        assert!(!app.should_quit);
+    }
+
+    // ── Tick ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_tick_updates_uptime() {
+        let mut app = make_app();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        app.tick();
+        assert!(app.dashboard.uptime.as_millis() > 0);
+    }
+
+    // ── Status line ───────────────────────────────────────────────
+
+    #[test]
+    fn test_status_line_contains_panel_name() {
+        let mut app = make_app();
+        assert!(app.status_line().contains("[Dashboard]"));
+
+        app.handle_action(Action::NextPanel);
+        assert!(app.status_line().contains("[Logs]"));
+    }
+}

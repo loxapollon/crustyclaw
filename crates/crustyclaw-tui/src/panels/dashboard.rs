@@ -125,4 +125,33 @@ mod tests {
         assert_eq!(panel.listen_port, 9100);
         assert!(!panel.signal_enabled);
     }
+
+    #[test]
+    fn test_dashboard_scroll() {
+        let config = AppConfig::default();
+        let mut panel = DashboardPanel::new(&config);
+        assert_eq!(panel.scroll_offset, 0);
+
+        panel.scroll_down(3);
+        assert_eq!(panel.scroll_offset, 3);
+
+        panel.scroll_up(1);
+        assert_eq!(panel.scroll_offset, 2);
+
+        panel.scroll_to_top();
+        assert_eq!(panel.scroll_offset, 0);
+
+        panel.scroll_down(5);
+        panel.scroll_to_bottom();
+        // scroll_to_bottom is a no-op for dashboard
+    }
+
+    #[test]
+    fn test_dashboard_scroll_saturating() {
+        let config = AppConfig::default();
+        let mut panel = DashboardPanel::new(&config);
+        // scroll_up at 0 should saturate, not underflow
+        panel.scroll_up(100);
+        assert_eq!(panel.scroll_offset, 0);
+    }
 }

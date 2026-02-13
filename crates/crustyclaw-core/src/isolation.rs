@@ -37,6 +37,8 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::BoxFuture;
+
 /// Errors from sandbox creation and execution.
 #[derive(Debug, thiserror::Error)]
 pub enum IsolationError {
@@ -482,6 +484,9 @@ impl SandboxResult {
 /// Implementations translate a [`SandboxConfig`] into native isolation
 /// primitives. Mirrors the role that Apple's Virtualization.framework
 /// plays on macOS.
+///
+/// [`execute`](SandboxBackend::execute) returns a [`BoxFuture`] because this
+/// trait is used via `dyn SandboxBackend` (dynamic dispatch).
 pub trait SandboxBackend: Send + Sync {
     /// Human-readable name of this backend (e.g. "apple-vz", "linux-ns").
     fn name(&self) -> &str;
@@ -496,9 +501,7 @@ pub trait SandboxBackend: Send + Sync {
         &self,
         config: &SandboxConfig,
         command: &[String],
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<SandboxResult, IsolationError>> + Send + '_>,
-    >;
+    ) -> BoxFuture<'_, Result<SandboxResult, IsolationError>>;
 }
 
 // ── Apple Virtualization backend (macOS) ────────────────────────────────
@@ -540,9 +543,7 @@ impl SandboxBackend for AppleVzBackend {
         &self,
         config: &SandboxConfig,
         command: &[String],
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<SandboxResult, IsolationError>> + Send + '_>,
-    > {
+    ) -> BoxFuture<'_, Result<SandboxResult, IsolationError>> {
         let label = config.label.clone();
         let _timeout = config.limits.timeout;
         let cmd = command.to_vec();
@@ -692,9 +693,7 @@ impl SandboxBackend for LinuxNamespaceBackend {
         &self,
         config: &SandboxConfig,
         command: &[String],
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<SandboxResult, IsolationError>> + Send + '_>,
-    > {
+    ) -> BoxFuture<'_, Result<SandboxResult, IsolationError>> {
         let label = config.label.clone();
         let _timeout = config.limits.timeout;
         let cgroup_limits = Self::cgroup_limits(&config.limits);
@@ -750,9 +749,7 @@ impl SandboxBackend for NoopBackend {
         &self,
         config: &SandboxConfig,
         command: &[String],
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<SandboxResult, IsolationError>> + Send + '_>,
-    > {
+    ) -> BoxFuture<'_, Result<SandboxResult, IsolationError>> {
         let label = config.label.clone();
         let timeout = config.limits.timeout;
         let workdir = config.workdir.clone();

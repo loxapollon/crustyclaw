@@ -15,17 +15,17 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyEventKind},
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
+    event::{self, Event, KeyEventKind},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph, Tabs},
 };
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 use app::{App, Panel};
 
@@ -40,10 +40,11 @@ async fn main() -> Result<()> {
         .with(log_collector)
         .init();
 
-    // Load config (best-effort)
+    // Load config (best-effort, async I/O)
     let config_path = PathBuf::from("crustyclaw.toml");
-    let config = if config_path.exists() {
+    let config = if tokio::fs::try_exists(&config_path).await.unwrap_or(false) {
         crustyclaw_config::AppConfig::load(&config_path)
+            .await
             .unwrap_or_else(|_| crustyclaw_config::AppConfig::default())
     } else {
         crustyclaw_config::AppConfig::default()
@@ -73,13 +74,12 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App
         app.tick();
         terminal.draw(|frame| render(frame, app))?;
 
-        if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    let action = app.keymap.resolve(key.code);
-                    app.handle_action(action);
-                }
-            }
+        if event::poll(std::time::Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            let action = app.keymap.resolve(key.code);
+            app.handle_action(action);
         }
 
         if app.should_quit {
