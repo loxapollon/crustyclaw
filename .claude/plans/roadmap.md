@@ -73,7 +73,7 @@ crustyclaw/
 - [x] `const` assertions for security invariants (key lengths, TLS versions)
 - [x] `KeyBuffer<N>` — const-generic sized key buffer with compile-time enforcement
 - [x] Build script: embed git commit hash, build timestamp, build profile
-- [ ] Container isolation: sandboxed skill execution (seccomp/landlock) — deferred
+- [x] Container isolation: Apple VZ–style sandbox with backend trait, Linux NS, and noop backends
 
 ## Phase 5 — Configuration & Policy Engine (Complete)
 - [x] Policy engine: role-based access control with priority-ordered rules

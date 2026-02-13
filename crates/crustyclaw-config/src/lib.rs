@@ -44,6 +44,10 @@ pub struct AppConfig {
     /// Security policy rules loaded from config.
     #[serde(default)]
     pub policy: PolicyConfig,
+
+    /// Isolation / sandbox configuration.
+    #[serde(default)]
+    pub isolation: IsolationConfig,
 }
 
 /// Security policy rules that can be defined in TOML.
@@ -76,6 +80,74 @@ pub struct PolicyRuleConfig {
 
 fn default_policy_default() -> String {
     "deny".to_string()
+}
+
+/// Isolation / sandbox configuration.
+///
+/// Controls how skill commands are isolated. Mirrors Apple's
+/// Virtualization.framework configuration model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IsolationConfig {
+    /// Isolation backend: "auto", "apple-vz", "linux-ns", or "noop".
+    #[serde(default = "default_isolation_backend")]
+    pub backend: String,
+
+    /// Default memory limit per sandbox in bytes.
+    #[serde(default = "default_isolation_memory")]
+    pub default_memory_bytes: u64,
+
+    /// Default CPU fraction per sandbox (0.0–1.0).
+    #[serde(default = "default_isolation_cpu_fraction")]
+    pub default_cpu_fraction: f64,
+
+    /// Default execution timeout in seconds (0 = no timeout).
+    #[serde(default = "default_isolation_timeout_secs")]
+    pub default_timeout_secs: u64,
+
+    /// Default network policy: "none", "host-only", "outbound-only".
+    #[serde(default = "default_isolation_network")]
+    pub default_network: String,
+
+    /// Maximum number of concurrent sandboxes.
+    #[serde(default = "default_isolation_max_concurrent")]
+    pub max_concurrent: usize,
+}
+
+impl Default for IsolationConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_isolation_backend(),
+            default_memory_bytes: default_isolation_memory(),
+            default_cpu_fraction: default_isolation_cpu_fraction(),
+            default_timeout_secs: default_isolation_timeout_secs(),
+            default_network: default_isolation_network(),
+            max_concurrent: default_isolation_max_concurrent(),
+        }
+    }
+}
+
+fn default_isolation_backend() -> String {
+    "auto".to_string()
+}
+
+fn default_isolation_memory() -> u64 {
+    256 * 1024 * 1024 // 256 MiB
+}
+
+fn default_isolation_cpu_fraction() -> f64 {
+    0.5
+}
+
+fn default_isolation_timeout_secs() -> u64 {
+    60
+}
+
+fn default_isolation_network() -> String {
+    "none".to_string()
+}
+
+fn default_isolation_max_concurrent() -> usize {
+    4
 }
 
 /// Configuration for the core daemon.
@@ -180,6 +252,38 @@ impl AppConfig {
                 "daemon.listen_addr must not be empty".to_string(),
             ));
         }
+        // Validate isolation config
+        let valid_backends = ["auto", "apple-vz", "linux-ns", "noop"];
+        if !valid_backends.contains(&self.isolation.backend.as_str()) {
+            return Err(ConfigError::Validation(format!(
+                "isolation.backend must be one of {:?}, got {:?}",
+                valid_backends, self.isolation.backend
+            )));
+        }
+        if self.isolation.default_cpu_fraction <= 0.0 || self.isolation.default_cpu_fraction > 1.0 {
+            return Err(ConfigError::Validation(format!(
+                "isolation.default_cpu_fraction must be in (0.0, 1.0], got {}",
+                self.isolation.default_cpu_fraction
+            )));
+        }
+        if self.isolation.default_memory_bytes == 0 {
+            return Err(ConfigError::Validation(
+                "isolation.default_memory_bytes must be non-zero".to_string(),
+            ));
+        }
+        let valid_networks = ["none", "host-only", "outbound-only"];
+        if !valid_networks.contains(&self.isolation.default_network.as_str()) {
+            return Err(ConfigError::Validation(format!(
+                "isolation.default_network must be one of {:?}, got {:?}",
+                valid_networks, self.isolation.default_network
+            )));
+        }
+        if self.isolation.max_concurrent == 0 {
+            return Err(ConfigError::Validation(
+                "isolation.max_concurrent must be at least 1".to_string(),
+            ));
+        }
+
         // Validate policy rules
         for (i, rule) in self.policy.rules.iter().enumerate() {
             if rule.effect != "allow" && rule.effect != "deny" {

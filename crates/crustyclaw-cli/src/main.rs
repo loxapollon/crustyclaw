@@ -71,6 +71,9 @@ enum Commands {
 
     /// List registered plugins (from config).
     Plugins,
+
+    /// Show isolation / sandbox configuration and backend status.
+    Isolation,
 }
 
 #[tokio::main]
@@ -102,6 +105,7 @@ async fn main() -> Result<()> {
             resource,
         } => cmd_policy(&cli.config, &role, &action, &resource)?,
         Commands::Plugins => cmd_plugins()?,
+        Commands::Isolation => cmd_isolation(&cli.config)?,
     }
 
     Ok(())
@@ -151,6 +155,7 @@ fn cmd_config(config_path: &Path, show: bool) -> Result<()> {
         );
         println!("  Log level: {}", config.logging.level);
         println!("  Policy rules: {}", config.policy.rules.len());
+        println!("  Isolation backend: {}", config.isolation.backend);
     }
     Ok(())
 }
@@ -195,6 +200,48 @@ fn cmd_plugins() -> Result<()> {
             println!("  - {name}");
         }
     }
+    Ok(())
+}
+
+fn cmd_isolation(config_path: &Path) -> Result<()> {
+    let config = load_config(config_path)?;
+    let iso = &config.isolation;
+
+    // Select backend and probe availability
+    let pref = match iso.backend.as_str() {
+        "apple-vz" => crustyclaw_core::isolation::BackendPreference::AppleVz,
+        "linux-ns" => crustyclaw_core::isolation::BackendPreference::LinuxNamespace,
+        "noop" => crustyclaw_core::isolation::BackendPreference::Noop,
+        _ => crustyclaw_core::isolation::BackendPreference::Auto,
+    };
+    let backend = crustyclaw_core::isolation::select_backend(&pref);
+
+    println!("Isolation configuration:");
+    println!("  Backend (config): {}", iso.backend);
+    println!(
+        "  Backend (resolved): {} (available: {})",
+        backend.name(),
+        backend.available()
+    );
+    println!(
+        "  Default memory: {} MiB",
+        iso.default_memory_bytes / (1024 * 1024)
+    );
+    println!(
+        "  Default CPU fraction: {:.0}%",
+        iso.default_cpu_fraction * 100.0
+    );
+    println!(
+        "  Default timeout: {}s",
+        if iso.default_timeout_secs == 0 {
+            "none".to_string()
+        } else {
+            iso.default_timeout_secs.to_string()
+        }
+    );
+    println!("  Default network: {}", iso.default_network);
+    println!("  Max concurrent sandboxes: {}", iso.max_concurrent);
+
     Ok(())
 }
 
