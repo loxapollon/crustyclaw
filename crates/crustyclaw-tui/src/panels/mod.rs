@@ -8,7 +8,7 @@ mod messages;
 pub use config::ConfigPanel;
 pub use dashboard::DashboardPanel;
 pub use logs::LogsPanel;
-pub use messages::MessagesPanel;
+pub use messages::{MessageDirection, MessageEntry, MessagesPanel};
 
 /// Trait for panels that support scrolling.
 pub trait PanelState {

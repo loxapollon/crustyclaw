@@ -9,7 +9,6 @@ use super::PanelState;
 
 /// A displayable message entry.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct MessageEntry {
     pub timestamp: String,
     pub channel: String,
@@ -19,7 +18,6 @@ pub struct MessageEntry {
 
 /// Direction of a message on the bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum MessageDirection {
     Inbound,
     Outbound,
@@ -42,7 +40,6 @@ impl MessagesPanel {
     }
 
     /// Push a new message into the panel.
-    #[allow(dead_code)]
     pub fn push(&mut self, entry: MessageEntry) {
         self.entries.push(entry);
         if self.auto_follow {

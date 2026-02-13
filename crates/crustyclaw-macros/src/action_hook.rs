@@ -122,7 +122,6 @@ pub fn expand(
         #original
 
         /// Auto-generated hook registration metadata.
-        #[allow(non_upper_case_globals)]
         const #registration_name: (&str, &str, u32) = (#fn_name_str, #event, #priority);
     };
 
