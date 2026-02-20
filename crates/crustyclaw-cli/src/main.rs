@@ -4,6 +4,12 @@
 //!
 //! Provides subcommands for managing the CrustyClaw daemon, inspecting
 //! configuration, evaluating security policies, and querying build info.
+//!
+//! ## Transparent Authentication
+//!
+//! The CLI authenticates automatically using the OS identity of the calling
+//! process (Unix UID/username). No password, token, or user interaction is
+//! required. The `whoami` subcommand shows the resolved identity and roles.
 
 use std::path::{Path, PathBuf};
 
@@ -74,6 +80,14 @@ enum Commands {
 
     /// Show isolation / sandbox configuration and backend status.
     Isolation,
+
+    /// Show current authentication identity, roles, and policy evaluation.
+    ///
+    /// Uses transparent local authentication — no password or token required.
+    Whoami,
+
+    /// Show configured secrets (names and sources only, never values).
+    Secrets,
 }
 
 #[tokio::main]
@@ -106,13 +120,55 @@ async fn main() -> Result<()> {
         } => cmd_policy(&cli.config, &role, &action, &resource)?,
         Commands::Plugins => cmd_plugins()?,
         Commands::Isolation => cmd_isolation(&cli.config)?,
+        Commands::Whoami => cmd_whoami(&cli.config)?,
+        Commands::Secrets => cmd_secrets(&cli.config)?,
     }
 
     Ok(())
 }
 
+/// Perform transparent authentication and return the authorized session.
+///
+/// This is called automatically by commands that need auth context.
+/// The operator never sees a prompt — the OS identity is the credential.
+fn transparent_auth(
+    config: &crustyclaw_config::AppConfig,
+) -> crustyclaw_core::auth::Session<crustyclaw_core::auth::Authorized> {
+    let session = crustyclaw_core::auth::Session::new().authenticate_local();
+
+    // Check if the config has an explicit role mapping for this user
+    let identity = session.identity().to_string();
+    let local = session.local_identity().cloned();
+
+    if let Some(mapped_role) = config.auth.role_map.get(&identity) {
+        // Use the explicitly configured role
+        let mut roles = vec![mapped_role.clone()];
+        // Also include the default role if different
+        if let Some(ref li) = local {
+            let default = li.default_role().to_string();
+            if default != *mapped_role {
+                roles.push(default);
+            }
+        }
+        session.authorize(roles)
+    } else {
+        // Fall back to policy-based authorization
+        let mut engine = config.build_policy_engine();
+        session.authorize_with_policy(&mut engine)
+    }
+}
+
 async fn cmd_start(config_path: &Path) -> Result<()> {
     let config = load_config(config_path)?;
+
+    // Transparent auth — authenticate the operator starting the daemon
+    let session = transparent_auth(&config);
+    info!(
+        identity = session.identity(),
+        roles = ?session.roles(),
+        "Authenticated operator"
+    );
+
     info!("Starting CrustyClaw daemon");
 
     let daemon = crustyclaw_core::Daemon::new(config);
@@ -156,6 +212,8 @@ fn cmd_config(config_path: &Path, show: bool) -> Result<()> {
         println!("  Log level: {}", config.logging.level);
         println!("  Policy rules: {}", config.policy.rules.len());
         println!("  Isolation backend: {}", config.isolation.backend);
+        println!("  Secrets: {} configured", config.secrets.entries.len());
+        println!("  Auth mode: {}", config.auth.mode);
     }
     Ok(())
 }
@@ -241,6 +299,76 @@ fn cmd_isolation(config_path: &Path) -> Result<()> {
     );
     println!("  Default network: {}", iso.default_network);
     println!("  Max concurrent sandboxes: {}", iso.max_concurrent);
+
+    Ok(())
+}
+
+fn cmd_whoami(config_path: &Path) -> Result<()> {
+    let config = load_config(config_path)?;
+
+    // Perform transparent authentication
+    let session = transparent_auth(&config);
+
+    println!("Authentication: transparent (local OS identity)");
+    println!("  Identity: {}", session.identity());
+    println!("  Roles:    {:?}", session.roles());
+
+    if let Some(local) = session.local_identity() {
+        println!("  UID:      {}", local.uid);
+        println!("  GID:      {}", local.gid);
+        println!(
+            "  Privileged: {}",
+            if local.is_privileged { "yes" } else { "no" }
+        );
+    }
+
+    // Show what this identity can do according to the policy engine
+    let mut engine = config.build_policy_engine();
+    let role = session.roles().first().map(|r| r.as_str()).unwrap_or("*");
+
+    println!("\nPolicy evaluation (role={role}):");
+    for (action, resource) in &[
+        ("read", "config"),
+        ("write", "config"),
+        ("read", "secrets"),
+        ("execute", "skills"),
+        ("read", "messages"),
+    ] {
+        let allowed = engine.is_allowed(role, action, resource);
+        let symbol = if allowed { "ALLOW" } else { "DENY" };
+        println!("  {action:>8} {resource:<12} {symbol}");
+    }
+
+    Ok(())
+}
+
+fn cmd_secrets(config_path: &Path) -> Result<()> {
+    let config = load_config(config_path)?;
+
+    if config.secrets.entries.is_empty() {
+        println!("No secrets configured.");
+        println!("  Add secrets to [secrets.entries] in crustyclaw.toml");
+        return Ok(());
+    }
+
+    println!("Secrets ({} configured):", config.secrets.entries.len());
+    println!("  Staging directory: {}", config.secrets.staging_dir);
+    println!();
+
+    for entry in &config.secrets.entries {
+        println!("  {}:", entry.name);
+        println!("    Source:    {}", entry.source);
+        println!("    Inject as: {}", entry.inject_as);
+        if let Some(ref env_name) = entry.inject_env {
+            println!("    Env var:   {env_name}");
+        }
+        if let Some(ref path) = entry.inject_path {
+            println!("    File path: {path}");
+        }
+        if !entry.description.is_empty() {
+            println!("    Note:      {}", entry.description);
+        }
+    }
 
     Ok(())
 }
