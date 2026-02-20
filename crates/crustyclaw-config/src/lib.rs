@@ -48,6 +48,14 @@ pub struct AppConfig {
     /// Isolation / sandbox configuration.
     #[serde(default)]
     pub isolation: IsolationConfig,
+
+    /// Secrets management configuration.
+    #[serde(default)]
+    pub secrets: SecretsConfig,
+
+    /// Authentication configuration.
+    #[serde(default)]
+    pub auth: AuthConfig,
 }
 
 /// Security policy rules that can be defined in TOML.
@@ -224,6 +232,147 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
+/// Secrets management configuration.
+///
+/// Secrets can be defined inline, loaded from environment variables, or
+/// loaded from files. Each secret specifies how it should be injected
+/// into sandbox containers (as env vars, files, or both).
+///
+/// ## TOML Example
+///
+/// ```toml
+/// [secrets]
+/// staging_dir = "/run/crustyclaw/secrets"
+///
+/// [[secrets.entries]]
+/// name = "llm_api_key"
+/// source = "env"
+/// env_var = "CRUSTYCLAW_SECRET_LLM_API_KEY"
+/// inject_as = "env"
+/// inject_env = "API_KEY"
+///
+/// [[secrets.entries]]
+/// name = "tls_cert"
+/// source = "file"
+/// file_path = "/etc/crustyclaw/tls.pem"
+/// inject_as = "file"
+/// inject_path = "/run/secrets/tls.pem"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecretsConfig {
+    /// Directory used to stage secret files before bind-mounting into containers.
+    /// Must be on a tmpfs or encrypted filesystem for production use.
+    #[serde(default = "default_secrets_staging_dir")]
+    pub staging_dir: String,
+
+    /// Named secret entries.
+    #[serde(default)]
+    pub entries: Vec<SecretEntryConfig>,
+}
+
+impl Default for SecretsConfig {
+    fn default() -> Self {
+        Self {
+            staging_dir: default_secrets_staging_dir(),
+            entries: Vec::new(),
+        }
+    }
+}
+
+fn default_secrets_staging_dir() -> String {
+    "/run/crustyclaw/secrets".to_string()
+}
+
+/// A single secret entry in the configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecretEntryConfig {
+    /// Unique name for this secret (used as lookup key).
+    pub name: String,
+
+    /// Source of the secret value: "env", "file", or "inline".
+    #[serde(default = "default_secret_source")]
+    pub source: String,
+
+    /// Environment variable to read from (when source = "env").
+    /// Defaults to `CRUSTYCLAW_SECRET_<NAME>` (uppercased).
+    #[serde(default)]
+    pub env_var: Option<String>,
+
+    /// File path to read from (when source = "file").
+    #[serde(default)]
+    pub file_path: Option<String>,
+
+    /// Inline value (when source = "inline"). Avoid in production.
+    #[serde(default)]
+    pub value: Option<String>,
+
+    /// How to inject: "env", "file", or "both".
+    #[serde(default = "default_inject_as")]
+    pub inject_as: String,
+
+    /// Environment variable name inside the container (when inject_as = "env" or "both").
+    #[serde(default)]
+    pub inject_env: Option<String>,
+
+    /// File path inside the container (when inject_as = "file" or "both").
+    #[serde(default)]
+    pub inject_path: Option<String>,
+
+    /// Optional description for operator reference.
+    #[serde(default)]
+    pub description: String,
+}
+
+fn default_secret_source() -> String {
+    "env".to_string()
+}
+
+fn default_inject_as() -> String {
+    "env".to_string()
+}
+
+/// Authentication configuration.
+///
+/// Controls how CLI/TUI sessions are authenticated. The default mode
+/// is "local" — the OS identity of the calling process is used as the
+/// credential, with no user interaction required.
+///
+/// ## TOML Example
+///
+/// ```toml
+/// [auth]
+/// mode = "local"
+///
+/// [auth.role_map]
+/// alice = "admin"
+/// bob = "operator"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthConfig {
+    /// Authentication mode: "local" (OS identity) or "token" (session token file).
+    #[serde(default = "default_auth_mode")]
+    pub mode: String,
+
+    /// Optional mapping of OS usernames to policy roles.
+    /// If a username is not in this map, the default role from
+    /// `LocalIdentity::default_role()` is used.
+    #[serde(default)]
+    pub role_map: std::collections::HashMap<String, String>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_auth_mode(),
+            role_map: std::collections::HashMap::new(),
+        }
+    }
+}
+
+fn default_auth_mode() -> String {
+    "local".to_string()
+}
+
 impl AppConfig {
     /// Load configuration from a TOML file at the given path.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
@@ -298,6 +447,62 @@ impl AppConfig {
                 )));
             }
         }
+
+        // Validate secrets config
+        for (i, entry) in self.secrets.entries.iter().enumerate() {
+            if entry.name.is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "secrets.entries[{i}].name must not be empty"
+                )));
+            }
+            let valid_sources = ["env", "file", "inline"];
+            if !valid_sources.contains(&entry.source.as_str()) {
+                return Err(ConfigError::Validation(format!(
+                    "secrets.entries[{i}].source must be one of {:?}, got {:?}",
+                    valid_sources, entry.source
+                )));
+            }
+            let valid_inject = ["env", "file", "both"];
+            if !valid_inject.contains(&entry.inject_as.as_str()) {
+                return Err(ConfigError::Validation(format!(
+                    "secrets.entries[{i}].inject_as must be one of {:?}, got {:?}",
+                    valid_inject, entry.inject_as
+                )));
+            }
+            // Require inject_env when injecting as env
+            if (entry.inject_as == "env" || entry.inject_as == "both") && entry.inject_env.is_none()
+            {
+                return Err(ConfigError::Validation(format!(
+                    "secrets.entries[{i}].inject_env is required when inject_as is \"{}\"",
+                    entry.inject_as
+                )));
+            }
+            // Require inject_path when injecting as file
+            if (entry.inject_as == "file" || entry.inject_as == "both")
+                && entry.inject_path.is_none()
+            {
+                return Err(ConfigError::Validation(format!(
+                    "secrets.entries[{i}].inject_path is required when inject_as is \"{}\"",
+                    entry.inject_as
+                )));
+            }
+            // Require file_path when source is file
+            if entry.source == "file" && entry.file_path.is_none() {
+                return Err(ConfigError::Validation(format!(
+                    "secrets.entries[{i}].file_path is required when source is \"file\""
+                )));
+            }
+        }
+
+        // Validate auth config
+        let valid_auth_modes = ["local", "token"];
+        if !valid_auth_modes.contains(&self.auth.mode.as_str()) {
+            return Err(ConfigError::Validation(format!(
+                "auth.mode must be one of {:?}, got {:?}",
+                valid_auth_modes, self.auth.mode
+            )));
+        }
+
         Ok(())
     }
 
@@ -448,5 +653,153 @@ mod tests {
         let mut engine = config.build_policy_engine();
         // With default allow, everything is permitted
         assert!(engine.is_allowed("anyone", "anything", "anywhere"));
+    }
+
+    #[test]
+    fn test_secrets_config_from_toml() {
+        let toml = r#"
+            [secrets]
+            staging_dir = "/tmp/secrets"
+
+            [[secrets.entries]]
+            name = "api_key"
+            source = "env"
+            inject_as = "env"
+            inject_env = "API_KEY"
+            description = "LLM API key"
+
+            [[secrets.entries]]
+            name = "tls_cert"
+            source = "file"
+            file_path = "/etc/crustyclaw/tls.pem"
+            inject_as = "file"
+            inject_path = "/run/secrets/tls.pem"
+        "#;
+        let config = AppConfig::parse(toml).unwrap();
+        assert_eq!(config.secrets.staging_dir, "/tmp/secrets");
+        assert_eq!(config.secrets.entries.len(), 2);
+        assert_eq!(config.secrets.entries[0].name, "api_key");
+        assert_eq!(config.secrets.entries[0].source, "env");
+        assert_eq!(config.secrets.entries[1].inject_as, "file");
+    }
+
+    #[test]
+    fn test_secrets_validation_rejects_empty_name() {
+        let toml = r#"
+            [[secrets.entries]]
+            name = ""
+            source = "env"
+            inject_as = "env"
+            inject_env = "KEY"
+        "#;
+        let result = AppConfig::parse(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_secrets_validation_rejects_bad_source() {
+        let toml = r#"
+            [[secrets.entries]]
+            name = "key"
+            source = "database"
+            inject_as = "env"
+            inject_env = "KEY"
+        "#;
+        let result = AppConfig::parse(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_secrets_validation_requires_inject_env() {
+        let toml = r#"
+            [[secrets.entries]]
+            name = "key"
+            source = "env"
+            inject_as = "env"
+        "#;
+        let result = AppConfig::parse(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_secrets_validation_requires_inject_path() {
+        let toml = r#"
+            [[secrets.entries]]
+            name = "cert"
+            source = "file"
+            file_path = "/etc/cert.pem"
+            inject_as = "file"
+        "#;
+        let result = AppConfig::parse(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_secrets_validation_requires_file_path() {
+        let toml = r#"
+            [[secrets.entries]]
+            name = "cert"
+            source = "file"
+            inject_as = "env"
+            inject_env = "CERT"
+        "#;
+        let result = AppConfig::parse(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_auth_config_default() {
+        let config = AppConfig::default();
+        assert_eq!(config.auth.mode, "local");
+        assert!(config.auth.role_map.is_empty());
+    }
+
+    #[test]
+    fn test_auth_config_from_toml() {
+        let toml = r#"
+            [auth]
+            mode = "local"
+
+            [auth.role_map]
+            alice = "admin"
+            bob = "operator"
+        "#;
+        let config = AppConfig::parse(toml).unwrap();
+        assert_eq!(config.auth.mode, "local");
+        assert_eq!(config.auth.role_map.get("alice").unwrap(), "admin");
+        assert_eq!(config.auth.role_map.get("bob").unwrap(), "operator");
+    }
+
+    #[test]
+    fn test_auth_validation_rejects_bad_mode() {
+        let toml = r#"
+            [auth]
+            mode = "oauth"
+        "#;
+        let result = AppConfig::parse(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_secrets_both_injection() {
+        let toml = r#"
+            [[secrets.entries]]
+            name = "dual_key"
+            source = "inline"
+            value = "secret-value"
+            inject_as = "both"
+            inject_env = "DUAL_KEY"
+            inject_path = "/run/secrets/dual_key"
+        "#;
+        let config = AppConfig::parse(toml).unwrap();
+        assert_eq!(config.secrets.entries[0].inject_as, "both");
+        assert_eq!(
+            config.secrets.entries[0].inject_env.as_ref().unwrap(),
+            "DUAL_KEY"
+        );
+        assert_eq!(
+            config.secrets.entries[0].inject_path.as_ref().unwrap(),
+            "/run/secrets/dual_key"
+        );
     }
 }

@@ -7,6 +7,7 @@
 //! (CLI, TUI, Signal adapter) communicate with.
 
 /// Type-state authentication lifecycle (`Unauthenticated → Authenticated → Authorized`).
+/// Includes transparent local-identity authentication for CLI/TUI.
 pub mod auth;
 /// Compile-time build metadata (version, git hash, profile).
 pub mod build_info;
@@ -20,12 +21,16 @@ pub mod logging;
 pub mod message;
 /// Plugin registry for Forgejo Action extensions.
 pub mod plugin;
+/// Secrets management — loading, storage, zeroization, and container injection.
+pub mod secrets;
 /// Compile-time security assertions and key management.
 pub mod security;
 /// Skill trait and runtime registry.
 pub mod skill;
 
+pub use auth::LocalIdentity;
 pub use daemon::Daemon;
 pub use isolation::{Sandbox, SandboxBackend, SandboxConfig};
 pub use logging::{LogCollector, LogReader};
 pub use plugin::PluginRegistry;
+pub use secrets::SecretStore;

@@ -195,6 +195,56 @@ impl fmt::Display for NetworkPolicy {
     }
 }
 
+// ── Secret injection spec ────────────────────────────────────────────────
+
+/// A secret injection specification for the sandbox.
+///
+/// This describes *where* a secret should appear inside the container,
+/// not the secret value itself. Values are resolved at execution time
+/// from the [`SecretStore`](crate::secrets::SecretStore).
+#[derive(Debug, Clone)]
+pub struct SecretInjection {
+    /// The secret name (lookup key in SecretStore).
+    pub name: String,
+    /// Inject as this environment variable inside the container.
+    pub env_name: Option<String>,
+    /// Inject as a read-only file at this path inside the container.
+    pub file_path: Option<PathBuf>,
+}
+
+impl SecretInjection {
+    /// Create an env-only injection.
+    pub fn as_env(name: impl Into<String>, env_name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            env_name: Some(env_name.into()),
+            file_path: None,
+        }
+    }
+
+    /// Create a file-only injection.
+    pub fn as_file(name: impl Into<String>, path: impl Into<PathBuf>) -> Self {
+        Self {
+            name: name.into(),
+            env_name: None,
+            file_path: Some(path.into()),
+        }
+    }
+
+    /// Create a dual (env + file) injection.
+    pub fn as_both(
+        name: impl Into<String>,
+        env_name: impl Into<String>,
+        path: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            env_name: Some(env_name.into()),
+            file_path: Some(path.into()),
+        }
+    }
+}
+
 // ── Sandbox configuration ───────────────────────────────────────────────
 
 /// Declarative sandbox configuration.
@@ -217,6 +267,12 @@ pub struct SandboxConfig {
     pub env: HashMap<String, String>,
     /// Working directory inside the sandbox.
     pub workdir: PathBuf,
+    /// Secret injection specifications.
+    ///
+    /// These describe *which* secrets to inject and *where*, not
+    /// the values themselves. The sandbox executor resolves values
+    /// from the [`SecretStore`](crate::secrets::SecretStore) at runtime.
+    pub secret_injections: Vec<SecretInjection>,
 }
 
 impl SandboxConfig {
@@ -229,6 +285,7 @@ impl SandboxConfig {
             network: NetworkPolicy::default(),
             env: HashMap::new(),
             workdir: PathBuf::from("/workspace"),
+            secret_injections: Vec::new(),
         }
     }
 
@@ -272,6 +329,90 @@ impl SandboxConfig {
     pub fn with_workdir(mut self, path: impl Into<PathBuf>) -> Self {
         self.workdir = path.into();
         self
+    }
+
+    /// Builder: add a secret injection specification.
+    pub fn with_secret(mut self, injection: SecretInjection) -> Self {
+        self.secret_injections.push(injection);
+        self
+    }
+
+    /// Builder: add a secret injected as an environment variable.
+    pub fn with_secret_env(
+        self,
+        secret_name: impl Into<String>,
+        env_name: impl Into<String>,
+    ) -> Self {
+        self.with_secret(SecretInjection::as_env(secret_name, env_name))
+    }
+
+    /// Builder: add a secret injected as a file.
+    pub fn with_secret_file(
+        self,
+        secret_name: impl Into<String>,
+        guest_path: impl Into<PathBuf>,
+    ) -> Self {
+        self.with_secret(SecretInjection::as_file(secret_name, guest_path))
+    }
+
+    /// Resolve secret injections against a [`SecretStore`], producing
+    /// a new `SandboxConfig` with secret values merged into `env` and
+    /// secret files added as read-only mounts.
+    ///
+    /// `staging_dir` is the host directory where secret files are staged
+    /// before bind-mounting into the container.
+    ///
+    /// This method does NOT modify `self` — it returns a new config with
+    /// secrets resolved. The original config can be reused for the next
+    /// invocation.
+    pub fn resolve_secrets(
+        &self,
+        store: &crate::secrets::SecretStore,
+        staging_dir: &std::path::Path,
+    ) -> Result<Self, IsolationError> {
+        let mut resolved = self.clone();
+
+        for injection in &self.secret_injections {
+            let entry = store.get(&injection.name).ok_or_else(|| {
+                IsolationError::Create(format!(
+                    "secret '{}' not found in secret store",
+                    injection.name
+                ))
+            })?;
+
+            // Inject as environment variable
+            if let Some(env_name) = &injection.env_name {
+                resolved
+                    .env
+                    .insert(env_name.clone(), entry.value.expose().to_string());
+            }
+
+            // Inject as file: stage to host, add read-only mount
+            if let Some(guest_path) = &injection.file_path {
+                let host_file = staging_dir.join(&injection.name);
+                std::fs::write(&host_file, entry.value.expose().as_bytes()).map_err(|e| {
+                    IsolationError::Create(format!(
+                        "failed to stage secret '{}': {e}",
+                        injection.name
+                    ))
+                })?;
+
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let perms = std::fs::Permissions::from_mode(0o400);
+                    let _ = std::fs::set_permissions(&host_file, perms);
+                }
+
+                resolved
+                    .mounts
+                    .push(SharedMount::read_only(host_file, guest_path));
+            }
+        }
+
+        // Clear injection specs from the resolved config (values are now in env/mounts)
+        resolved.secret_injections.clear();
+        Ok(resolved)
     }
 
     /// Validate the configuration for obvious errors.
@@ -1093,5 +1234,191 @@ mod tests {
         } else {
             panic!("expected AllowList");
         }
+    }
+
+    #[test]
+    fn test_secret_injection_as_env() {
+        let inj = SecretInjection::as_env("api_key", "API_KEY");
+        assert_eq!(inj.name, "api_key");
+        assert_eq!(inj.env_name.as_ref().unwrap(), "API_KEY");
+        assert!(inj.file_path.is_none());
+    }
+
+    #[test]
+    fn test_secret_injection_as_file() {
+        let inj = SecretInjection::as_file("tls_cert", "/run/secrets/cert.pem");
+        assert_eq!(inj.name, "tls_cert");
+        assert!(inj.env_name.is_none());
+        assert_eq!(
+            inj.file_path.as_ref().unwrap(),
+            &PathBuf::from("/run/secrets/cert.pem")
+        );
+    }
+
+    #[test]
+    fn test_secret_injection_as_both() {
+        let inj = SecretInjection::as_both("db_pass", "DB_PASSWORD", "/run/secrets/db_pass");
+        assert_eq!(inj.name, "db_pass");
+        assert_eq!(inj.env_name.as_ref().unwrap(), "DB_PASSWORD");
+        assert_eq!(
+            inj.file_path.as_ref().unwrap(),
+            &PathBuf::from("/run/secrets/db_pass")
+        );
+    }
+
+    #[test]
+    fn test_sandbox_config_with_secrets() {
+        let config = SandboxConfig::new("secret-test")
+            .with_secret_env("api_key", "API_KEY")
+            .with_secret_file("cert", "/run/secrets/cert.pem");
+
+        assert_eq!(config.secret_injections.len(), 2);
+        assert_eq!(config.secret_injections[0].name, "api_key");
+        assert_eq!(config.secret_injections[1].name, "cert");
+    }
+
+    #[test]
+    fn test_resolve_secrets_env() {
+        use crate::secrets::{
+            InjectionMethod, SecretEntry, SecretSource, SecretStore, SecretValue,
+        };
+
+        let mut store = SecretStore::new();
+        store
+            .insert(
+                SecretEntry {
+                    name: "my_key".to_string(),
+                    value: SecretValue::new("secret-value-123"),
+                    injection: InjectionMethod::Env("MY_KEY".to_string()),
+                    description: String::new(),
+                },
+                SecretSource::Config,
+            )
+            .unwrap();
+
+        let config = SandboxConfig::new("resolve-test")
+            .with_secret_env("my_key", "INJECTED_KEY")
+            .with_workdir("/tmp");
+
+        let staging = std::env::temp_dir().join("crustyclaw-test-resolve");
+        std::fs::create_dir_all(&staging).ok();
+
+        let resolved = config.resolve_secrets(&store, &staging).unwrap();
+
+        // Secret should be in the env map
+        assert_eq!(
+            resolved.env.get("INJECTED_KEY").unwrap(),
+            "secret-value-123"
+        );
+        // Injection specs should be cleared
+        assert!(resolved.secret_injections.is_empty());
+
+        std::fs::remove_dir_all(&staging).ok();
+    }
+
+    #[test]
+    fn test_resolve_secrets_file() {
+        use crate::secrets::{
+            InjectionMethod, SecretEntry, SecretSource, SecretStore, SecretValue,
+        };
+
+        let mut store = SecretStore::new();
+        store
+            .insert(
+                SecretEntry {
+                    name: "cert".to_string(),
+                    value: SecretValue::new("CERTIFICATE-DATA"),
+                    injection: InjectionMethod::File(PathBuf::from("/run/secrets/cert")),
+                    description: String::new(),
+                },
+                SecretSource::Config,
+            )
+            .unwrap();
+
+        let config = SandboxConfig::new("file-resolve-test")
+            .with_secret_file("cert", "/container/secrets/cert.pem")
+            .with_workdir("/tmp");
+
+        let staging = std::env::temp_dir().join("crustyclaw-test-file-resolve");
+        std::fs::create_dir_all(&staging).ok();
+
+        let resolved = config.resolve_secrets(&store, &staging).unwrap();
+
+        // Secret should be in the mounts list
+        let secret_mount = resolved
+            .mounts
+            .iter()
+            .find(|m| m.guest_path == PathBuf::from("/container/secrets/cert.pem"));
+        assert!(secret_mount.is_some());
+        assert_eq!(secret_mount.unwrap().access, MountAccess::ReadOnly);
+
+        // Verify the staged file
+        let staged_file = staging.join("cert");
+        assert!(staged_file.exists());
+        let content = std::fs::read_to_string(&staged_file).unwrap();
+        assert_eq!(content, "CERTIFICATE-DATA");
+
+        std::fs::remove_dir_all(&staging).ok();
+    }
+
+    #[test]
+    fn test_resolve_secrets_missing() {
+        use crate::secrets::SecretStore;
+
+        let store = SecretStore::new();
+        let config = SandboxConfig::new("missing-test")
+            .with_secret_env("nonexistent", "NOPE")
+            .with_workdir("/tmp");
+
+        let staging = std::env::temp_dir().join("crustyclaw-test-missing");
+        std::fs::create_dir_all(&staging).ok();
+
+        let result = config.resolve_secrets(&store, &staging);
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(&staging).ok();
+    }
+
+    #[tokio::test]
+    async fn test_noop_backend_with_resolved_secrets() {
+        use crate::secrets::{
+            InjectionMethod, SecretEntry, SecretSource, SecretStore, SecretValue,
+        };
+
+        let mut store = SecretStore::new();
+        store
+            .insert(
+                SecretEntry {
+                    name: "test_secret".to_string(),
+                    value: SecretValue::new("injected-value"),
+                    injection: InjectionMethod::Env("TEST_SECRET".to_string()),
+                    description: String::new(),
+                },
+                SecretSource::Config,
+            )
+            .unwrap();
+
+        let config = SandboxConfig::new("e2e-secret-test")
+            .with_secret_env("test_secret", "CONTAINER_SECRET")
+            .with_workdir("/tmp");
+
+        let staging = std::env::temp_dir().join("crustyclaw-test-e2e-secret");
+        std::fs::create_dir_all(&staging).ok();
+
+        let resolved = config.resolve_secrets(&store, &staging).unwrap();
+        let sandbox = Sandbox::new(resolved, Box::new(NoopBackend)).unwrap();
+        let result = sandbox
+            .execute(&[
+                "sh".to_string(),
+                "-c".to_string(),
+                "echo $CONTAINER_SECRET".to_string(),
+            ])
+            .await
+            .unwrap();
+
+        assert!(result.success());
+        assert_eq!(result.stdout.trim(), "injected-value");
+
+        std::fs::remove_dir_all(&staging).ok();
     }
 }
