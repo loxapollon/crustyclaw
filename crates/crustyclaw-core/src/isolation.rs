@@ -1345,7 +1345,7 @@ mod tests {
         let secret_mount = resolved
             .mounts
             .iter()
-            .find(|m| m.guest_path == PathBuf::from("/container/secrets/cert.pem"));
+            .find(|m| m.guest_path == std::path::Path::new("/container/secrets/cert.pem"));
         assert!(secret_mount.is_some());
         assert_eq!(secret_mount.unwrap().access, MountAccess::ReadOnly);
 

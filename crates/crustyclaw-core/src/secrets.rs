@@ -628,9 +628,11 @@ mod tests {
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_load_from_env() {
         // Set an env var for testing
-        std::env::set_var("CRUSTYCLAW_SECRET_TEST_KEY", "env-secret-value");
+        // SAFETY: This test is single-threaded and we clean up the var before returning.
+        unsafe { std::env::set_var("CRUSTYCLAW_SECRET_TEST_KEY", "env-secret-value") };
 
         let mut store = SecretStore::new();
         store
@@ -647,7 +649,8 @@ mod tests {
         );
 
         // Cleanup
-        std::env::remove_var("CRUSTYCLAW_SECRET_TEST_KEY");
+        // SAFETY: This test is single-threaded and the var was set above.
+        unsafe { std::env::remove_var("CRUSTYCLAW_SECRET_TEST_KEY") };
     }
 
     #[test]
