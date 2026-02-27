@@ -56,6 +56,10 @@ pub struct AppConfig {
     /// Authentication configuration.
     #[serde(default)]
     pub auth: AuthConfig,
+
+    /// LLM provider configuration.
+    #[serde(default)]
+    pub llm: LlmConfig,
 }
 
 /// Security policy rules that can be defined in TOML.
@@ -191,6 +195,11 @@ pub struct DaemonConfig {
     /// Port the daemon listens on.
     #[serde(default = "default_listen_port")]
     pub listen_port: u16,
+
+    /// Path to the Unix domain socket for IPC (CLI/TUI control).
+    /// Defaults to `/tmp/crustyclaw.sock`.
+    #[serde(default)]
+    pub socket_path: Option<String>,
 }
 
 impl Default for DaemonConfig {
@@ -198,6 +207,7 @@ impl Default for DaemonConfig {
         Self {
             listen_addr: default_listen_addr(),
             listen_port: default_listen_port(),
+            socket_path: None,
         }
     }
 }
@@ -394,6 +404,82 @@ impl Default for AuthConfig {
 
 fn default_auth_mode() -> String {
     "local".to_string()
+}
+
+/// LLM provider configuration.
+///
+/// Controls which LLM API to use, how to authenticate, and default parameters.
+///
+/// ## TOML Example
+///
+/// ```toml
+/// [llm]
+/// provider = "anthropic"
+/// model = "claude-sonnet-4-20250514"
+/// # api_key is loaded from CRUSTYCLAW_LLM_API_KEY env var by default
+/// max_tokens = 4096
+/// temperature = 0.0
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmConfig {
+    /// Provider: "anthropic" or "openai".
+    #[serde(default = "default_llm_provider")]
+    pub provider: LlmProviderKind,
+
+    /// API key for the provider. Can also be set via `CRUSTYCLAW_LLM_API_KEY` env var.
+    #[serde(default)]
+    pub api_key: String,
+
+    /// Default model identifier (e.g. "claude-sonnet-4-20250514", "gpt-4o").
+    #[serde(default = "default_llm_model")]
+    pub model: String,
+
+    /// Custom API base URL (for OpenAI-compatible providers like Ollama).
+    #[serde(default)]
+    pub base_url: Option<String>,
+
+    /// Default max tokens per response.
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+
+    /// Default temperature (0.0–2.0).
+    #[serde(default)]
+    pub temperature: f32,
+}
+
+/// Which LLM provider to use.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum LlmProviderKind {
+    #[default]
+    Anthropic,
+    OpenAi,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_llm_provider(),
+            api_key: String::new(),
+            model: default_llm_model(),
+            base_url: None,
+            max_tokens: default_max_tokens(),
+            temperature: 0.0,
+        }
+    }
+}
+
+fn default_llm_provider() -> LlmProviderKind {
+    LlmProviderKind::Anthropic
+}
+
+fn default_llm_model() -> String {
+    "claude-sonnet-4-20250514".to_string()
+}
+
+fn default_max_tokens() -> u32 {
+    4096
 }
 
 impl AppConfig {

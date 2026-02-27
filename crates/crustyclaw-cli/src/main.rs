@@ -109,8 +109,8 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Start => cmd_start(&cli.config).await?,
-        Commands::Stop => cmd_stop().await?,
-        Commands::Status => cmd_status().await?,
+        Commands::Stop => cmd_stop(&cli.config).await?,
+        Commands::Status => cmd_status(&cli.config).await?,
         Commands::Config { show } => cmd_config(&cli.config, show).await?,
         Commands::Version => cmd_version(),
         Commands::Policy {
@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
             action,
             resource,
         } => cmd_policy(&cli.config, &role, &action, &resource).await?,
-        Commands::Plugins => cmd_plugins()?,
+        Commands::Plugins => cmd_plugins(&cli.config).await?,
         Commands::Isolation => cmd_isolation(&cli.config).await?,
         Commands::Whoami => cmd_whoami(&cli.config).await?,
         Commands::Secrets => cmd_secrets(&cli.config).await?,
@@ -177,15 +177,59 @@ async fn cmd_start(config_path: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_stop() -> Result<()> {
-    info!("Sending stop signal to CrustyClaw daemon");
-    eprintln!("Stop command not yet implemented (daemon IPC pending)");
+async fn cmd_stop(config_path: &Path) -> Result<()> {
+    let config = load_config(config_path).await?;
+    let client = ipc_client(&config);
+
+    if !client.daemon_available() {
+        eprintln!("Daemon is not running (no socket found).");
+        std::process::exit(1);
+    }
+
+    let resp = client
+        .stop()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to stop daemon: {e}"))?;
+    println!("Daemon: {}", resp.message);
     Ok(())
 }
 
-async fn cmd_status() -> Result<()> {
-    info!("Querying CrustyClaw daemon status");
-    eprintln!("Status command not yet implemented (daemon IPC pending)");
+async fn cmd_status(config_path: &Path) -> Result<()> {
+    let config = load_config(config_path).await?;
+    let client = ipc_client(&config);
+
+    if !client.daemon_available() {
+        println!("Daemon: not running");
+        return Ok(());
+    }
+
+    match client.status().await {
+        Ok(status) => {
+            println!("Daemon: running (PID {})", status.pid);
+            println!("  Version:    {} ({})", status.version, status.git_hash);
+            println!("  Uptime:     {}s", status.uptime_secs);
+            println!(
+                "  Listen:     {}:{}",
+                status.listen_addr, status.listen_port
+            );
+            println!(
+                "  Signal:     {}",
+                if status.signal_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+            println!("  Log level:  {}", status.log_level);
+            println!("  Isolation:  {}", status.isolation_backend);
+            println!("  Skills:     {}", status.skills_count);
+            println!("  Plugins:    {}", status.plugins_count);
+        }
+        Err(e) => {
+            eprintln!("Failed to query daemon status: {e}");
+            std::process::exit(1);
+        }
+    }
     Ok(())
 }
 
@@ -246,16 +290,29 @@ async fn cmd_policy(config_path: &Path, role: &str, action: &str, resource: &str
     Ok(())
 }
 
-fn cmd_plugins() -> Result<()> {
-    let registry = crustyclaw_core::PluginRegistry::new();
-    let names = registry.plugin_names();
-    if names.is_empty() {
-        println!("No plugins registered.");
+async fn cmd_plugins(config_path: &Path) -> Result<()> {
+    let config = load_config(config_path).await?;
+    let client = ipc_client(&config);
+
+    if !client.daemon_available() {
+        println!("No plugins registered (daemon is not running).");
         println!("  Plugins are discovered at daemon startup.");
-    } else {
-        println!("Registered plugins:");
-        for name in names {
-            println!("  - {name}");
+        return Ok(());
+    }
+
+    match client.plugins().await {
+        Ok(resp) => {
+            if resp.plugins.is_empty() {
+                println!("No plugins registered.");
+            } else {
+                println!("Registered plugins:");
+                for p in &resp.plugins {
+                    println!("  {} v{} — {}", p.name, p.version, p.description);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to query plugins: {e}");
         }
     }
     Ok(())
@@ -397,6 +454,12 @@ async fn cmd_secrets(config_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Create an IPC client from the loaded config.
+fn ipc_client(config: &crustyclaw_config::AppConfig) -> crustyclaw_core::IpcClient {
+    let socket_path = crustyclaw_core::ipc::server::socket_path_from_config(config);
+    crustyclaw_core::IpcClient::new(socket_path)
 }
 
 async fn load_config(path: &Path) -> Result<crustyclaw_config::AppConfig> {
