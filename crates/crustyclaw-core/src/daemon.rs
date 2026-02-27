@@ -9,13 +9,18 @@
 //! | **SIGINT** (Ctrl-C) | Same as SIGTERM. |
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::{broadcast, watch};
 use tracing::{error, info, warn};
 
 use crustyclaw_config::AppConfig;
 
+use crate::ipc;
 use crate::message::Envelope;
+use crate::plugin::PluginRegistry;
+use crate::skill::SkillRegistry;
 
 /// Shutdown signal sent via broadcast channel.
 #[derive(Debug, Clone)]
@@ -31,6 +36,9 @@ pub struct Daemon {
     _shutdown_rx: broadcast::Receiver<ShutdownSignal>,
     message_tx: broadcast::Sender<Envelope>,
     _message_rx: broadcast::Receiver<Envelope>,
+    skills: Arc<SkillRegistry>,
+    plugins: Arc<PluginRegistry>,
+    started_at: Instant,
 }
 
 impl Daemon {
@@ -54,6 +62,9 @@ impl Daemon {
             _shutdown_rx,
             message_tx,
             _message_rx,
+            skills: Arc::new(SkillRegistry::new()),
+            plugins: Arc::new(PluginRegistry::new()),
+            started_at: Instant::now(),
         }
     }
 
@@ -68,6 +79,25 @@ impl Daemon {
             port = %self.config.daemon.listen_port,
             "CrustyClaw daemon starting"
         );
+
+        // Start the IPC server on a Unix domain socket
+        let socket_path = ipc::server::socket_path_from_config(&self.config);
+        let ipc_state = Arc::new(ipc::IpcState {
+            config: self.config_rx.clone(),
+            shutdown_tx: self.shutdown_tx.clone(),
+            skills: self.skills.clone(),
+            plugins: self.plugins.clone(),
+            started_at: self.started_at,
+        });
+        let ipc_shutdown_rx = self.shutdown_tx.subscribe();
+        let ipc_handle = tokio::spawn({
+            let socket_path = socket_path.clone();
+            async move {
+                if let Err(e) = ipc::server::serve(&socket_path, ipc_state, ipc_shutdown_rx).await {
+                    error!(error = %e, "IPC server error");
+                }
+            }
+        });
 
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
@@ -115,6 +145,9 @@ impl Daemon {
                 }
             }
         }
+
+        // Wait for IPC server to finish
+        let _ = ipc_handle.await;
 
         info!("Daemon stopped");
         Ok(())
@@ -175,6 +208,21 @@ impl Daemon {
     /// Get the config file path used for SIGHUP reloads.
     pub fn config_path(&self) -> &PathBuf {
         &self.config_path
+    }
+
+    /// Get the skill registry.
+    pub fn skills(&self) -> &Arc<SkillRegistry> {
+        &self.skills
+    }
+
+    /// Get the plugin registry.
+    pub fn plugins(&self) -> &Arc<PluginRegistry> {
+        &self.plugins
+    }
+
+    /// Get the shutdown sender (for IPC or programmatic shutdown).
+    pub fn shutdown_sender(&self) -> broadcast::Sender<ShutdownSignal> {
+        self.shutdown_tx.clone()
     }
 }
 

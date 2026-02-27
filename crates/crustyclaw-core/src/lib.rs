@@ -23,10 +23,16 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub mod auth;
 /// Compile-time build metadata (version, git hash, profile).
 pub mod build_info;
+/// Context engine — tool registry, codebase indexing, and context window management.
+pub mod context;
 /// Async daemon runtime and message bus.
 pub mod daemon;
+/// IPC layer — Unix domain socket transport for CLI/TUI control.
+pub mod ipc;
 /// Multi-backend sandbox isolation for skills (Docker, Firecracker, Apple VZ, Linux NS, noop).
 pub mod isolation;
+/// LLM provider integration — multi-provider chat completions with tool use.
+pub mod llm;
 /// In-memory log collector for the TUI.
 pub mod logging;
 /// Message envelope types for the internal bus.
@@ -42,6 +48,7 @@ pub mod skill;
 
 pub use auth::LocalIdentity;
 pub use daemon::Daemon;
+pub use ipc::{IpcClient, IpcState};
 pub use isolation::{
     CredentialProxy, DockerSandboxBackend, FirecrackerBackend, IsolationLevel, Sandbox,
     SandboxBackend, SandboxConfig, TrustBasedSelector, TrustTier,
