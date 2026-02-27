@@ -25,7 +25,7 @@ pub mod auth;
 pub mod build_info;
 /// Async daemon runtime and message bus.
 pub mod daemon;
-/// Apple Virtualization–style sandbox isolation for skills.
+/// Multi-backend sandbox isolation for skills (Docker, Firecracker, Apple VZ, Linux NS, noop).
 pub mod isolation;
 /// In-memory log collector for the TUI.
 pub mod logging;
@@ -42,7 +42,10 @@ pub mod skill;
 
 pub use auth::LocalIdentity;
 pub use daemon::Daemon;
-pub use isolation::{Sandbox, SandboxBackend, SandboxConfig};
+pub use isolation::{
+    CredentialProxy, DockerSandboxBackend, FirecrackerBackend, IsolationLevel, Sandbox,
+    SandboxBackend, SandboxConfig, TrustBasedSelector, TrustTier,
+};
 pub use logging::{LogCollector, LogReader};
 pub use plugin::PluginRegistry;
 pub use secrets::SecretStore;

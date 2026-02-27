@@ -267,6 +267,8 @@ async fn cmd_isolation(config_path: &Path) -> Result<()> {
 
     // Select backend and probe availability
     let pref = match iso.backend.as_str() {
+        "docker" => crustyclaw_core::isolation::BackendPreference::Docker,
+        "firecracker" => crustyclaw_core::isolation::BackendPreference::Firecracker,
         "apple-vz" => crustyclaw_core::isolation::BackendPreference::AppleVz,
         "linux-ns" => crustyclaw_core::isolation::BackendPreference::LinuxNamespace,
         "noop" => crustyclaw_core::isolation::BackendPreference::Noop,
@@ -299,6 +301,30 @@ async fn cmd_isolation(config_path: &Path) -> Result<()> {
     );
     println!("  Default network: {}", iso.default_network);
     println!("  Max concurrent sandboxes: {}", iso.max_concurrent);
+    println!("  Docker image: {}", iso.docker_image);
+    println!(
+        "  Credential proxy: {}",
+        if iso.credential_proxy {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+
+    // Trust-based isolation
+    if let Some(ref tier) = iso.default_trust_tier
+        && let Some(trust) = crustyclaw_core::TrustTier::from_str_loose(tier)
+    {
+        let level = crustyclaw_core::TrustBasedSelector::required_level(trust);
+        let selector = crustyclaw_core::TrustBasedSelector::new();
+        let trust_backend = selector.select(trust);
+        println!(
+            "  Trust tier: {} → {} (backend: {})",
+            trust,
+            level,
+            trust_backend.name()
+        );
+    }
 
     Ok(())
 }
