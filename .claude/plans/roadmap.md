@@ -158,34 +158,39 @@ crustyclaw/
 
 ---
 
-## Phase 9 — Sandboxing Layer (Planned)
+## Phase 9 — Sandboxing Layer (Complete)
 
 **Goal:** Upgrade isolation from trait stubs to production-ready multi-backend
 sandboxing, with trust-based isolation level selection.
 
 *Research: [Stripe Minions & Docker Sandboxes](../../docs/research/stripe-minions-docker-sandboxes.md)*
 
-- [ ] **Docker Sandbox backend** — `DockerSandboxBackend` using `docker sandbox` CLI
-  - MicroVM-level isolation (each skill gets its own VM + private Docker daemon)
-  - Credential proxy: API keys never exist inside the sandbox
-  - Network allow/deny lists per skill
-  - Workspace sync at consistent absolute paths
-- [ ] **Firecracker backend** — for self-hosted / headless Linux deployments
-  - Direct KVM microVM management via Firecracker API
-  - ~150 ms boot, <5 MiB overhead per VM
-  - Suitable for multi-tenant agent execution
-- [ ] **Trust-based isolation selection**
-  - Policy engine selects isolation level based on skill trust tier:
-    - `trusted` → L1 (container / noop)
-    - `internal` → L2 (gVisor / Linux NS)
-    - `untrusted` / `llm-generated` → L3 (microVM)
-  - Configurable per-skill overrides in `crustyclaw.toml`
-- [ ] **Credential proxying** — sentinel-value swapping for all sandbox backends
-  - API keys injected at the network proxy layer, never in sandbox memory
-  - Audit log of credential access
-- [ ] **Resource limits** — memory, CPU, timeout, network per-sandbox
-  - Enforcement at the backend level (cgroups / VM limits)
-  - Policy-driven defaults with per-skill overrides
+- [x] **Docker Sandbox backend** — `DockerSandboxBackend` using `docker run` CLI
+  - Container isolation with `--rm --init`, resource limits (`--cpus`, `--memory`, `--pids-limit`)
+  - Network policies (none/host/bridge), filesystem mounts (ro/rw), env injection
+  - Container label tracking, timeout enforcement, auto-cleanup
+  - Refactored `isolation.rs` monolith into module directory (`isolation/`)
+- [x] **Firecracker backend** — for self-hosted / headless Linux deployments
+  - `FirecrackerBackend` with KVM availability detection
+  - VM config JSON generation (kernel, rootfs, vcpu, memory)
+  - Unix socket–based API architecture (stub execute, full lifecycle TODO in code)
+- [x] **Trust-based isolation selection**
+  - `TrustTier` enum: Trusted, Internal, Untrusted, LlmGenerated
+  - `IsolationLevel` enum: L1Container, L2Namespace, L3MicroVm (with Ord)
+  - `TrustBasedSelector`: maps trust tier → isolation level → best available backend
+  - Fallback chain: Firecracker → Docker → Linux NS → Noop
+  - Configurable `default_trust_tier` in `crustyclaw.toml`
+  - `forced_backend` override for development/testing
+- [x] **Credential proxying** — sentinel-value swapping for all sandbox backends
+  - `CredentialProxy` with `SentinelMapping` (name → sentinel → env_name)
+  - `inject_sentinels()`: injects `__CRUSTYCLAW_SENTINEL_<name>__` into sandbox env
+  - `resolve_sentinels()`: maps sentinels to real values from `SecretStore`
+  - `contains_sentinels()`: leak detection for output scanning
+- [x] **Resource limits** — memory, CPU, timeout, network per-sandbox
+  - Docker: `--cpus`, `--memory`, `--memory-swap`, `--pids-limit`
+  - Linux NS: cgroup v2 limits (`memory.max`, `cpu.max`, `pids.max`)
+  - Noop: timeout enforcement via `tokio::time::timeout`
+  - Config schema: `docker_image`, `credential_proxy`, `default_trust_tier`
 
 ## Phase 10 — Context Engine (Planned)
 

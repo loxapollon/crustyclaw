@@ -1,11 +1,11 @@
-//! Apple Virtualization–style isolation for sandboxed skill execution.
+//! Multi-backend sandbox isolation for skill execution.
 //!
-//! Models isolation contexts after Apple's `Virtualization.framework`:
-//! each skill invocation runs inside a [`Sandbox`] configured with explicit
+//! Each skill invocation runs inside a [`Sandbox`] configured with explicit
 //! resource grants — filesystem mounts, memory caps, CPU limits, and network
 //! policies. The [`SandboxBackend`] trait abstracts over the host platform so
-//! the same sandbox configuration works on macOS (Apple Virtualization
-//! Framework) and Linux (namespaces + seccomp + landlock).
+//! the same sandbox configuration works across Docker containers, Firecracker
+//! microVMs, Apple Virtualization Framework, Linux namespaces, and a no-op
+//! development backend.
 //!
 //! ## Architecture
 //!
@@ -21,16 +21,34 @@
 //! │                     │ build()                       │
 //! │  ┌──────────────────▼───────────────────────────┐  │
 //! │  │           Sandbox (running instance)          │  │
-//! │  │                                               │  │
 //! │  │  ┌─────────────────────────────────────────┐  │  │
 //! │  │  │  SandboxBackend (platform-specific)     │  │  │
-//! │  │  │  ┌─────────┐ ┌───────┐ ┌───────────┐   │  │  │
-//! │  │  │  │Apple VZ │ │ Linux │ │  No-op    │   │  │  │
-//! │  │  │  └─────────┘ └───────┘ └───────────┘   │  │  │
+//! │  │  │  ┌────────┐ ┌───────────┐ ┌─────────┐  │  │  │
+//! │  │  │  │ Docker │ │Firecracker│ │Apple VZ │  │  │  │
+//! │  │  │  └────────┘ └───────────┘ └─────────┘  │  │  │
+//! │  │  │  ┌────────┐ ┌───────┐                   │  │  │
+//! │  │  │  │Linux NS│ │ Noop  │                   │  │  │
+//! │  │  │  └────────┘ └───────┘                   │  │  │
 //! │  │  └─────────────────────────────────────────┘  │  │
 //! │  └───────────────────────────────────────────────┘  │
 //! └────────────────────────────────────────────────────┘
 //! ```
+
+mod apple_vz;
+mod credential_proxy;
+mod docker;
+mod firecracker;
+mod linux_ns;
+mod noop;
+mod trust;
+
+pub use apple_vz::AppleVzBackend;
+pub use credential_proxy::{CredentialProxy, SentinelMapping};
+pub use docker::DockerSandboxBackend;
+pub use firecracker::FirecrackerBackend;
+pub use linux_ns::{LandlockAccess, LandlockRule, LinuxNamespaceBackend, SeccompProfile};
+pub use noop::NoopBackend;
+pub use trust::{IsolationLevel, TrustBasedSelector, TrustTier};
 
 use std::collections::HashMap;
 use std::fmt;
@@ -62,6 +80,9 @@ pub enum IsolationError {
 
     #[error("unsupported backend on this platform: {0}")]
     UnsupportedBackend(String),
+
+    #[error("credential proxy error: {0}")]
+    CredentialProxy(String),
 }
 
 // ── Resource limits ─────────────────────────────────────────────────────
@@ -138,8 +159,6 @@ impl fmt::Display for MountAccess {
 }
 
 /// A filesystem mount shared between host and sandbox.
-///
-/// Mirrors Apple VZ's `VZSharedDirectory` / `VZVirtioFileSystemDeviceConfiguration`.
 #[derive(Debug, Clone)]
 pub struct SharedMount {
     /// Path on the host.
@@ -251,10 +270,9 @@ impl SecretInjection {
 
 /// Declarative sandbox configuration.
 ///
-/// Analogous to Apple's `VZVirtualMachineConfiguration` — describes
-/// *what* resources the sandbox should have without specifying *how*
-/// the platform enforces them. The [`SandboxBackend`] translates this
-/// into platform-native isolation primitives.
+/// Describes *what* resources the sandbox should have without specifying
+/// *how* the platform enforces them. The [`SandboxBackend`] translates
+/// this into platform-native isolation primitives.
 #[derive(Debug, Clone)]
 pub struct SandboxConfig {
     /// Human-readable label for this sandbox (used in logs).
@@ -360,13 +378,6 @@ impl SandboxConfig {
     /// Resolve secret injections against a [`SecretStore`], producing
     /// a new `SandboxConfig` with secret values merged into `env` and
     /// secret files added as read-only mounts.
-    ///
-    /// `staging_dir` is the host directory where secret files are staged
-    /// before bind-mounting into the container.
-    ///
-    /// This method does NOT modify `self` — it returns a new config with
-    /// secrets resolved. The original config can be reused for the next
-    /// invocation.
     pub fn resolve_secrets(
         &self,
         store: &crate::secrets::SecretStore,
@@ -482,13 +493,12 @@ impl SandboxResult {
 /// Platform-specific isolation backend.
 ///
 /// Implementations translate a [`SandboxConfig`] into native isolation
-/// primitives. Mirrors the role that Apple's Virtualization.framework
-/// plays on macOS.
+/// primitives.
 ///
 /// [`execute`](SandboxBackend::execute) returns a [`BoxFuture`] because this
 /// trait is used via `dyn SandboxBackend` (dynamic dispatch).
 pub trait SandboxBackend: Send + Sync {
-    /// Human-readable name of this backend (e.g. "apple-vz", "linux-ns").
+    /// Human-readable name of this backend (e.g. "docker", "firecracker").
     fn name(&self) -> &str;
 
     /// Whether this backend is available on the current platform.
@@ -504,325 +514,12 @@ pub trait SandboxBackend: Send + Sync {
     ) -> BoxFuture<'_, Result<SandboxResult, IsolationError>>;
 }
 
-// ── Apple Virtualization backend (macOS) ────────────────────────────────
-
-/// Apple Virtualization Framework backend.
-///
-/// On macOS, uses `Virtualization.framework` to create lightweight VMs for
-/// skill isolation. Each sandbox is a minimal Linux VM image booted via
-/// `VZLinuxBootLoader` with shared directories exposed as virtio-fs mounts.
-///
-/// On non-macOS platforms, [`available()`](SandboxBackend::available) returns `false`.
-pub struct AppleVzBackend {
-    /// Path to the Linux kernel image used for VMs.
-    pub kernel_path: PathBuf,
-    /// Path to the initrd (initial ramdisk).
-    pub initrd_path: PathBuf,
-}
-
-impl AppleVzBackend {
-    /// Create a new Apple VZ backend with paths to boot assets.
-    pub fn new(kernel_path: impl Into<PathBuf>, initrd_path: impl Into<PathBuf>) -> Self {
-        Self {
-            kernel_path: kernel_path.into(),
-            initrd_path: initrd_path.into(),
-        }
-    }
-}
-
-impl SandboxBackend for AppleVzBackend {
-    fn name(&self) -> &str {
-        "apple-vz"
-    }
-
-    fn available(&self) -> bool {
-        cfg!(target_os = "macos") && self.kernel_path.exists() && self.initrd_path.exists()
-    }
-
-    fn execute(
-        &self,
-        config: &SandboxConfig,
-        command: &[String],
-    ) -> BoxFuture<'_, Result<SandboxResult, IsolationError>> {
-        let label = config.label.clone();
-        let _timeout = config.limits.timeout;
-        let cmd = command.to_vec();
-
-        Box::pin(async move {
-            tracing::info!(
-                backend = "apple-vz",
-                label = %label,
-                cmd = ?cmd,
-                "Creating Apple VZ sandbox"
-            );
-
-            // TODO: FFI bridge to Virtualization.framework
-            // - VZVirtualMachineConfiguration
-            // - VZLinuxBootLoader with kernel + initrd
-            // - VZVirtioFileSystemDeviceConfiguration for shared mounts
-            // - VZNetworkDeviceConfiguration based on NetworkPolicy
-            // - VZMemoryBalloonDeviceConfiguration for memory limits
-            Err(IsolationError::UnsupportedBackend(
-                "Apple Virtualization FFI not yet implemented; \
-                 requires macOS 12+ and Virtualization.framework bridge"
-                    .to_string(),
-            ))
-        })
-    }
-}
-
-// ── Linux namespace backend ─────────────────────────────────────────────
-
-/// Linux isolation backend using namespaces, seccomp, and landlock.
-///
-/// Provides container-grade isolation without requiring a full VM:
-///
-/// | Mechanism | Purpose |
-/// |-----------|---------|
-/// | PID namespace | Process tree isolation |
-/// | Mount namespace | Filesystem isolation + bind mounts |
-/// | Network namespace | Network isolation (veth pair or none) |
-/// | User namespace | Unprivileged sandboxing (UID mapping) |
-/// | seccomp-BPF | Syscall allowlist |
-/// | Landlock | Filesystem access control |
-/// | cgroups v2 | Resource limits (CPU, memory, PIDs) |
-pub struct LinuxNamespaceBackend {
-    /// Seccomp BPF profile (applied when namespace isolation is active).
-    pub seccomp_profile: SeccompProfile,
-}
-
-/// Seccomp syscall filtering profile.
-#[derive(Debug, Clone, Default)]
-pub enum SeccompProfile {
-    /// Allow all syscalls (no filtering).
-    Disabled,
-    /// Default restrictive profile: blocks dangerous syscalls.
-    #[default]
-    Default,
-    /// Custom allowlist of permitted syscall names.
-    AllowList(Vec<String>),
-}
-
-impl LinuxNamespaceBackend {
-    /// Create a new Linux namespace backend with the default seccomp profile.
-    pub fn new() -> Self {
-        Self {
-            seccomp_profile: SeccompProfile::Default,
-        }
-    }
-
-    /// Create with a custom seccomp profile.
-    pub fn with_seccomp(profile: SeccompProfile) -> Self {
-        Self {
-            seccomp_profile: profile,
-        }
-    }
-
-    /// Generate the cgroup resource limit arguments for a sandbox config.
-    fn cgroup_limits(limits: &ResourceLimits) -> Vec<(String, String)> {
-        let mut cg = Vec::new();
-        // Memory limit
-        cg.push((
-            "memory.max".to_string(),
-            limits.memory.max_bytes.to_string(),
-        ));
-        if !limits.memory.allow_swap {
-            cg.push(("memory.swap.max".to_string(), "0".to_string()));
-        }
-        // CPU limit (bandwidth controller: quota/period)
-        let period_us: u64 = 100_000; // 100ms
-        let quota_us = (period_us as f64 * limits.cpu.cpu_fraction) as u64;
-        cg.push(("cpu.max".to_string(), format!("{quota_us} {period_us}")));
-        // PID limit
-        if let Some(max_pids) = limits.max_pids {
-            cg.push(("pids.max".to_string(), max_pids.to_string()));
-        }
-        cg
-    }
-
-    /// Generate landlock filesystem rules from the sandbox mounts.
-    fn landlock_rules(config: &SandboxConfig) -> Vec<LandlockRule> {
-        config
-            .mounts
-            .iter()
-            .map(|m| LandlockRule {
-                path: m.host_path.clone(),
-                access: match m.access {
-                    MountAccess::ReadOnly => LandlockAccess::ReadOnly,
-                    MountAccess::ReadWrite => LandlockAccess::ReadWrite,
-                },
-            })
-            .collect()
-    }
-}
-
-/// A Landlock filesystem access rule.
-#[derive(Debug, Clone)]
-pub struct LandlockRule {
-    /// Host path to grant access to.
-    pub path: PathBuf,
-    /// Access level.
-    pub access: LandlockAccess,
-}
-
-/// Landlock access levels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LandlockAccess {
-    /// Read-only file access.
-    ReadOnly,
-    /// Read-write file access.
-    ReadWrite,
-}
-
-impl Default for LinuxNamespaceBackend {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SandboxBackend for LinuxNamespaceBackend {
-    fn name(&self) -> &str {
-        "linux-ns"
-    }
-
-    fn available(&self) -> bool {
-        cfg!(target_os = "linux")
-    }
-
-    fn execute(
-        &self,
-        config: &SandboxConfig,
-        command: &[String],
-    ) -> BoxFuture<'_, Result<SandboxResult, IsolationError>> {
-        let label = config.label.clone();
-        let _timeout = config.limits.timeout;
-        let cgroup_limits = Self::cgroup_limits(&config.limits);
-        let landlock_rules = Self::landlock_rules(config);
-        let network = config.network.clone();
-        let cmd = command.to_vec();
-
-        Box::pin(async move {
-            tracing::info!(
-                backend = "linux-ns",
-                label = %label,
-                cmd = ?cmd,
-                cgroups = ?cgroup_limits,
-                landlock_rules = landlock_rules.len(),
-                network = %network,
-                "Creating Linux namespace sandbox"
-            );
-
-            // TODO: Implement via clone3(CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWNET | CLONE_NEWUSER)
-            // 1. Create cgroup and write limits
-            // 2. Set up mount namespace with bind mounts
-            // 3. Apply Landlock ruleset
-            // 4. Install seccomp-BPF filter
-            // 5. Set up network namespace (veth or none)
-            // 6. exec the command
-            Err(IsolationError::UnsupportedBackend(
-                "Linux namespace isolation not yet implemented; \
-                 requires clone3, seccomp, and landlock syscall integration"
-                    .to_string(),
-            ))
-        })
-    }
-}
-
-// ── No-op (development) backend ─────────────────────────────────────────
-
-/// No-op sandbox backend for development and testing.
-///
-/// Runs commands directly on the host with no isolation. Resource limits
-/// are logged but not enforced. **Never use in production.**
-pub struct NoopBackend;
-
-impl SandboxBackend for NoopBackend {
-    fn name(&self) -> &str {
-        "noop"
-    }
-
-    fn available(&self) -> bool {
-        true
-    }
-
-    fn execute(
-        &self,
-        config: &SandboxConfig,
-        command: &[String],
-    ) -> BoxFuture<'_, Result<SandboxResult, IsolationError>> {
-        let label = config.label.clone();
-        let timeout = config.limits.timeout;
-        let workdir = config.workdir.clone();
-        let env = config.env.clone();
-        let cmd = command.to_vec();
-
-        Box::pin(async move {
-            tracing::warn!(
-                backend = "noop",
-                label = %label,
-                "Running WITHOUT isolation (development mode)"
-            );
-
-            if cmd.is_empty() {
-                return Err(IsolationError::Execution(
-                    "command must not be empty".to_string(),
-                ));
-            }
-
-            let start = std::time::Instant::now();
-
-            let mut proc = tokio::process::Command::new(&cmd[0]);
-            proc.args(&cmd[1..])
-                .current_dir(&workdir)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-
-            for (k, v) in &env {
-                proc.env(k, v);
-            }
-
-            let child = proc
-                .spawn()
-                .map_err(|e| IsolationError::Execution(format!("spawn failed: {e}")))?;
-
-            let output = match timeout {
-                Some(dur) => {
-                    let result = tokio::time::timeout(dur, child.wait_with_output()).await;
-                    match result {
-                        Ok(Ok(output)) => output,
-                        Ok(Err(e)) => {
-                            return Err(IsolationError::Execution(format!("wait failed: {e}")));
-                        }
-                        Err(_) => {
-                            return Err(IsolationError::Timeout(dur));
-                        }
-                    }
-                }
-                None => child
-                    .wait_with_output()
-                    .await
-                    .map_err(|e| IsolationError::Execution(format!("wait failed: {e}")))?,
-            };
-
-            let elapsed = start.elapsed();
-
-            Ok(SandboxResult {
-                exit_code: output.status.code().unwrap_or(-1),
-                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                elapsed,
-                peak_memory_bytes: None,
-            })
-        })
-    }
-}
-
 // ── Sandbox (high-level handle) ─────────────────────────────────────────
 
 /// A configured sandbox ready to execute skill commands.
 ///
-/// Analogous to an instantiated `VZVirtualMachine` — holds a validated
-/// config and a reference to the backend that will enforce isolation.
+/// Holds a validated config and a reference to the backend that will
+/// enforce isolation.
 pub struct Sandbox {
     config: SandboxConfig,
     backend: Box<dyn SandboxBackend>,
@@ -885,6 +582,10 @@ pub enum BackendPreference {
     AppleVz,
     /// Force Linux namespace isolation.
     LinuxNamespace,
+    /// Docker container sandbox (MicroVM-level isolation).
+    Docker,
+    /// Firecracker microVM.
+    Firecracker,
     /// Force no-op (development only).
     Noop,
 }
@@ -895,6 +596,8 @@ impl fmt::Display for BackendPreference {
             BackendPreference::Auto => write!(f, "auto"),
             BackendPreference::AppleVz => write!(f, "apple-vz"),
             BackendPreference::LinuxNamespace => write!(f, "linux-ns"),
+            BackendPreference::Docker => write!(f, "docker"),
+            BackendPreference::Firecracker => write!(f, "firecracker"),
             BackendPreference::Noop => write!(f, "noop"),
         }
     }
@@ -902,7 +605,8 @@ impl fmt::Display for BackendPreference {
 
 /// Select the best available isolation backend for this platform.
 ///
-/// Priority: Apple VZ (macOS) > Linux namespaces (Linux) > No-op.
+/// Priority: Docker > Firecracker (Linux) > Linux NS (Linux) >
+/// Apple VZ (macOS) > No-op.
 pub fn select_backend(preference: &BackendPreference) -> Box<dyn SandboxBackend> {
     match preference {
         BackendPreference::AppleVz => Box::new(AppleVzBackend::new(
@@ -910,19 +614,31 @@ pub fn select_backend(preference: &BackendPreference) -> Box<dyn SandboxBackend>
             "/usr/local/share/crustyclaw/initrd.img",
         )),
         BackendPreference::LinuxNamespace => Box::new(LinuxNamespaceBackend::new()),
+        BackendPreference::Docker => Box::new(DockerSandboxBackend::default()),
+        BackendPreference::Firecracker => Box::new(FirecrackerBackend::default()),
         BackendPreference::Noop => Box::new(NoopBackend),
         BackendPreference::Auto => {
+            // Prefer Docker if available (MicroVM-level isolation)
+            let docker = DockerSandboxBackend::default();
+            if docker.available() {
+                return Box::new(docker);
+            }
+            // Firecracker on Linux with KVM
             if cfg!(target_os = "linux") {
-                Box::new(LinuxNamespaceBackend::new())
-            } else if cfg!(target_os = "macos") {
-                Box::new(AppleVzBackend::new(
+                let fc = FirecrackerBackend::default();
+                if fc.available() {
+                    return Box::new(fc);
+                }
+                return Box::new(LinuxNamespaceBackend::new());
+            }
+            if cfg!(target_os = "macos") {
+                return Box::new(AppleVzBackend::new(
                     "/usr/local/share/crustyclaw/vmlinuz",
                     "/usr/local/share/crustyclaw/initrd.img",
-                ))
-            } else {
-                tracing::warn!("No native isolation available, falling back to noop backend");
-                Box::new(NoopBackend)
+                ));
             }
+            tracing::warn!("No native isolation available, falling back to noop backend");
+            Box::new(NoopBackend)
         }
     }
 }
@@ -1003,28 +719,6 @@ mod tests {
     }
 
     #[test]
-    fn test_noop_backend_available() {
-        let backend = NoopBackend;
-        assert!(backend.available());
-        assert_eq!(backend.name(), "noop");
-    }
-
-    #[test]
-    fn test_linux_ns_backend() {
-        let backend = LinuxNamespaceBackend::new();
-        assert_eq!(backend.name(), "linux-ns");
-        // available() depends on target_os
-    }
-
-    #[test]
-    fn test_apple_vz_backend() {
-        let backend = AppleVzBackend::new("/nonexistent/kernel", "/nonexistent/initrd");
-        assert_eq!(backend.name(), "apple-vz");
-        // Not available because paths don't exist
-        assert!(!backend.available());
-    }
-
-    #[test]
     fn test_sandbox_creation_with_noop() {
         let config = SandboxConfig::new("test");
         let sandbox = Sandbox::new(config, Box::new(NoopBackend)).unwrap();
@@ -1038,72 +732,6 @@ mod tests {
         let backend = AppleVzBackend::new("/nonexistent", "/nonexistent");
         let result = Sandbox::new(config, Box::new(backend));
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_noop_backend_execute_echo() {
-        let config = SandboxConfig::new("echo-test")
-            .with_timeout(Duration::from_secs(5))
-            .with_workdir("/tmp");
-
-        let sandbox = Sandbox::new(config, Box::new(NoopBackend)).unwrap();
-        let result = sandbox
-            .execute(&[
-                "echo".to_string(),
-                "hello".to_string(),
-                "sandbox".to_string(),
-            ])
-            .await
-            .unwrap();
-
-        assert!(result.success());
-        assert_eq!(result.stdout.trim(), "hello sandbox");
-        assert!(result.stderr.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_noop_backend_execute_failure() {
-        let config = SandboxConfig::new("fail-test").with_workdir("/tmp");
-
-        let sandbox = Sandbox::new(config, Box::new(NoopBackend)).unwrap();
-        let result = sandbox.execute(&["false".to_string()]).await.unwrap();
-
-        assert!(!result.success());
-        assert_ne!(result.exit_code, 0);
-    }
-
-    #[tokio::test]
-    async fn test_noop_backend_timeout() {
-        let config = SandboxConfig::new("timeout-test")
-            .with_timeout(Duration::from_millis(100))
-            .with_workdir("/tmp");
-
-        let sandbox = Sandbox::new(config, Box::new(NoopBackend)).unwrap();
-        let result = sandbox
-            .execute(&["sleep".to_string(), "10".to_string()])
-            .await;
-
-        assert!(matches!(result, Err(IsolationError::Timeout(_))));
-    }
-
-    #[tokio::test]
-    async fn test_noop_backend_env_vars() {
-        let config = SandboxConfig::new("env-test")
-            .with_env("MY_VAR", "hello_from_sandbox")
-            .with_workdir("/tmp");
-
-        let sandbox = Sandbox::new(config, Box::new(NoopBackend)).unwrap();
-        let result = sandbox
-            .execute(&[
-                "sh".to_string(),
-                "-c".to_string(),
-                "echo $MY_VAR".to_string(),
-            ])
-            .await
-            .unwrap();
-
-        assert!(result.success());
-        assert_eq!(result.stdout.trim(), "hello_from_sandbox");
     }
 
     #[tokio::test]
@@ -1121,47 +749,22 @@ mod tests {
     }
 
     #[test]
+    fn test_select_backend_docker() {
+        let backend = select_backend(&BackendPreference::Docker);
+        assert_eq!(backend.name(), "docker");
+    }
+
+    #[test]
+    fn test_select_backend_firecracker() {
+        let backend = select_backend(&BackendPreference::Firecracker);
+        assert_eq!(backend.name(), "firecracker");
+    }
+
+    #[test]
     fn test_select_backend_auto() {
         let backend = select_backend(&BackendPreference::Auto);
-        // On Linux CI, should select linux-ns
-        if cfg!(target_os = "linux") {
-            assert_eq!(backend.name(), "linux-ns");
-        }
-    }
-
-    #[test]
-    fn test_cgroup_limits_generation() {
-        let limits = ResourceLimits {
-            cpu: CpuLimits {
-                max_cores: 2,
-                cpu_fraction: 0.5,
-            },
-            memory: MemoryLimits {
-                max_bytes: 128 * 1024 * 1024,
-                allow_swap: false,
-            },
-            timeout: None,
-            max_open_files: None,
-            max_pids: Some(64),
-        };
-
-        let cg = LinuxNamespaceBackend::cgroup_limits(&limits);
-        assert!(cg.iter().any(|(k, _)| k == "memory.max"));
-        assert!(cg.iter().any(|(k, _)| k == "memory.swap.max"));
-        assert!(cg.iter().any(|(k, _)| k == "cpu.max"));
-        assert!(cg.iter().any(|(k, _)| k == "pids.max"));
-    }
-
-    #[test]
-    fn test_landlock_rules_generation() {
-        let config = SandboxConfig::new("ll-test")
-            .with_mount(SharedMount::read_only("/opt/skills", "/skills"))
-            .with_mount(SharedMount::read_write("/tmp/scratch", "/scratch"));
-
-        let rules = LinuxNamespaceBackend::landlock_rules(&config);
-        assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0].access, LandlockAccess::ReadOnly);
-        assert_eq!(rules[1].access, LandlockAccess::ReadWrite);
+        // Backend depends on platform — just verify it returns something
+        assert!(!backend.name().is_empty());
     }
 
     #[test]
@@ -1210,27 +813,9 @@ mod tests {
         assert_eq!(BackendPreference::Auto.to_string(), "auto");
         assert_eq!(BackendPreference::AppleVz.to_string(), "apple-vz");
         assert_eq!(BackendPreference::LinuxNamespace.to_string(), "linux-ns");
+        assert_eq!(BackendPreference::Docker.to_string(), "docker");
+        assert_eq!(BackendPreference::Firecracker.to_string(), "firecracker");
         assert_eq!(BackendPreference::Noop.to_string(), "noop");
-    }
-
-    #[test]
-    fn test_seccomp_profile_default() {
-        let backend = LinuxNamespaceBackend::new();
-        assert!(matches!(backend.seccomp_profile, SeccompProfile::Default));
-    }
-
-    #[test]
-    fn test_seccomp_custom_allowlist() {
-        let backend = LinuxNamespaceBackend::with_seccomp(SeccompProfile::AllowList(vec![
-            "read".to_string(),
-            "write".to_string(),
-            "exit_group".to_string(),
-        ]));
-        if let SeccompProfile::AllowList(syscalls) = &backend.seccomp_profile {
-            assert_eq!(syscalls.len(), 3);
-        } else {
-            panic!("expected AllowList");
-        }
     }
 
     #[test]

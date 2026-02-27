@@ -92,11 +92,12 @@ fn default_policy_default() -> String {
 
 /// Isolation / sandbox configuration.
 ///
-/// Controls how skill commands are isolated. Mirrors Apple's
-/// Virtualization.framework configuration model.
+/// Controls how skill commands are isolated. Supports multiple backends:
+/// Docker containers, Firecracker microVMs, Apple Virtualization Framework,
+/// Linux namespaces, and a no-op development backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IsolationConfig {
-    /// Isolation backend: "auto", "apple-vz", "linux-ns", or "noop".
+    /// Isolation backend: "auto", "docker", "firecracker", "apple-vz", "linux-ns", or "noop".
     #[serde(default = "default_isolation_backend")]
     pub backend: String,
 
@@ -119,6 +120,21 @@ pub struct IsolationConfig {
     /// Maximum number of concurrent sandboxes.
     #[serde(default = "default_isolation_max_concurrent")]
     pub max_concurrent: usize,
+
+    /// Default trust tier for skills: "trusted", "internal", "untrusted", "llm-generated".
+    /// When set, the trust-based selector overrides the `backend` field.
+    #[serde(default)]
+    pub default_trust_tier: Option<String>,
+
+    /// Docker container image for sandboxed skills.
+    #[serde(default = "default_docker_image")]
+    pub docker_image: String,
+
+    /// Enable credential proxying (sentinel-value swapping).
+    /// When true, secrets are injected as sentinel placeholders
+    /// rather than real values.
+    #[serde(default)]
+    pub credential_proxy: bool,
 }
 
 impl Default for IsolationConfig {
@@ -130,6 +146,9 @@ impl Default for IsolationConfig {
             default_timeout_secs: default_isolation_timeout_secs(),
             default_network: default_isolation_network(),
             max_concurrent: default_isolation_max_concurrent(),
+            default_trust_tier: None,
+            docker_image: default_docker_image(),
+            credential_proxy: false,
         }
     }
 }
@@ -156,6 +175,10 @@ fn default_isolation_network() -> String {
 
 fn default_isolation_max_concurrent() -> usize {
     4
+}
+
+fn default_docker_image() -> String {
+    "alpine:latest".to_string()
 }
 
 /// Configuration for the core daemon.
@@ -402,12 +425,29 @@ impl AppConfig {
             ));
         }
         // Validate isolation config
-        let valid_backends = ["auto", "apple-vz", "linux-ns", "noop"];
+        let valid_backends = [
+            "auto",
+            "docker",
+            "firecracker",
+            "apple-vz",
+            "linux-ns",
+            "noop",
+        ];
         if !valid_backends.contains(&self.isolation.backend.as_str()) {
             return Err(ConfigError::Validation(format!(
                 "isolation.backend must be one of {:?}, got {:?}",
                 valid_backends, self.isolation.backend
             )));
+        }
+        // Validate trust tier if specified
+        if let Some(ref tier) = self.isolation.default_trust_tier {
+            let valid_tiers = ["trusted", "internal", "untrusted", "llm-generated"];
+            if !valid_tiers.contains(&tier.as_str()) {
+                return Err(ConfigError::Validation(format!(
+                    "isolation.default_trust_tier must be one of {:?}, got {:?}",
+                    valid_tiers, tier
+                )));
+            }
         }
         if self.isolation.default_cpu_fraction <= 0.0 || self.isolation.default_cpu_fraction > 1.0 {
             return Err(ConfigError::Validation(format!(
@@ -859,7 +899,54 @@ mod tests {
     fn test_validation_rejects_invalid_backend() {
         let toml = r#"
             [isolation]
+            backend = "hyperv"
+        "#;
+        let result = AppConfig::parse(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validation_accepts_docker_backend() {
+        let toml = r#"
+            [isolation]
             backend = "docker"
+        "#;
+        let config = AppConfig::parse(toml).unwrap();
+        assert_eq!(config.isolation.backend, "docker");
+    }
+
+    #[test]
+    fn test_validation_accepts_firecracker_backend() {
+        let toml = r#"
+            [isolation]
+            backend = "firecracker"
+        "#;
+        let config = AppConfig::parse(toml).unwrap();
+        assert_eq!(config.isolation.backend, "firecracker");
+    }
+
+    #[test]
+    fn test_trust_tier_config() {
+        let toml = r#"
+            [isolation]
+            default_trust_tier = "untrusted"
+            credential_proxy = true
+            docker_image = "ubuntu:22.04"
+        "#;
+        let config = AppConfig::parse(toml).unwrap();
+        assert_eq!(
+            config.isolation.default_trust_tier.as_ref().unwrap(),
+            "untrusted"
+        );
+        assert!(config.isolation.credential_proxy);
+        assert_eq!(config.isolation.docker_image, "ubuntu:22.04");
+    }
+
+    #[test]
+    fn test_validation_rejects_invalid_trust_tier() {
+        let toml = r#"
+            [isolation]
+            default_trust_tier = "suspicious"
         "#;
         let result = AppConfig::parse(toml);
         assert!(result.is_err());
